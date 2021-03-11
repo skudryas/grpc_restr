@@ -27,15 +27,15 @@ class Chain {
 
         // write constructors
         Dh(const std::vector<uint8_t> &buf) :
-          buf_(buf), begin_(0), end_(buf_.size()) {} 
+          buf_(buf), begin_(0), end_(buf_.size()) {}
         Dh(std::vector<uint8_t> &&buf) :
-          buf_(std::move(buf)), begin_(0), end_(buf_.size()) {} 
+          buf_(std::move(buf)), begin_(0), end_(buf_.size()) {}
         Dh(const uint8_t *buf, size_t size) :
                 begin_(0), end_(size) {
           buf_.resize(size);
           memcpy(buf_.data(), buf, size);
         }
-        // accessors 
+        // accessors
         size_t size() const { // w
           return end_ - begin_;
         }
@@ -84,7 +84,7 @@ class Chain {
     Buffer readTo(size_t recommended = 1) {
       if (chain_.size() == 0 || chain_.back().space() < recommended) {
           chain_.emplace_back(std::max(recommended, blockSize_));
-      } 
+      }
       return Buffer{ chain_.back().tail(), chain_.back().space() };
     }
     Buffer writeFrom(size_t recommended = 0) {
@@ -106,7 +106,7 @@ class Chain {
           for (auto & i: chain_) {
             gotsize += i.size();
             if (gotsize >= atleast)
-              break; 
+              break;
           }
           Dh dh(gotsize);
           for (auto i = chain_.begin(); gotsize != 0 && i != chain_.end(); ) {
@@ -118,6 +118,7 @@ class Chain {
             dh.fill(r.size);
             gotsize -= r.size;
           }
+          chain_.emplace_front(dh);
         } else {
           // Сase 2. Move to front node
           chain_.front().pullup();
@@ -135,6 +136,7 @@ class Chain {
           }
         }
         Dh &front = chain_.front();
+        assert(front.data() != nullptr);
         return Buffer{ front.data(), front.size() };
       } else {
         return Buffer{ nullptr, 0 };
