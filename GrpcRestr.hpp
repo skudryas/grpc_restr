@@ -3,6 +3,10 @@
 #include "GrpcDefault.hpp"
 #include "Repl.h"
 
+#ifdef GRPC_RESTR_PROFILE
+#include <gperftools/profiler.h>
+#endif
+
 #include "rtkmb.pb.h"
 
 class GrpcRestrProvider;
@@ -13,8 +17,15 @@ class GrpcRestrStreamProd: public GrpcStream
   private:
     Repl::Repl &repl_;
     mbproto::ProduceRequest request_;
+    GrpcRestrProvider *prov_;
+    Http2Stream *stream_;
   public:
-    GrpcRestrStreamProd(Repl::Repl &repl): repl_(repl) {}
+    GrpcRestrStreamProd(Http2Stream *stream, Repl::Repl &repl, GrpcRestrProvider *prov):
+      stream_(stream), repl_(repl), prov_(prov) {}
+    ~GrpcRestrStreamProd()
+    {
+      stream_->setDlgt(nullptr);
+    }
     virtual void onCreated(Http2Stream* stream) override;
     virtual void onError(Http2Stream *stream, const Http2StreamError& error) override;
     virtual void onRead(Http2Stream *, Chain::Buffer&) override;
@@ -37,6 +48,7 @@ class GrpcRestrStreamCons: public GrpcStream
       virtual void consume(const std::string &key, const std::string &data) override;
       mbproto::ConsumeResponse response_;
       std::string tmpstr_;
+      std::mutex wmtx_;
     };
     ConsumerWrapper cons_;
     Http2Stream *stream_;
@@ -74,11 +86,15 @@ class GrpcRestrProvider: public GrpcStreamProvider
     // Single producer handler for all streams but many consumer handlers for each stream
     Repl::Repl &repl_;
     Grpc404Stream stream404_;
-    GrpcRestrStreamProd producer_;
+    std::set<GrpcRestrStreamProd*> producers_;
     std::set<GrpcRestrStreamCons*> consumers_;
+#ifdef GRPC_RESTR_PROFILE
+    bool profiling_ = {false};
+#endif
   public:
-    GrpcRestrProvider(Repl::Repl &repl): repl_(repl), producer_(repl) {}
+    GrpcRestrProvider(Repl::Repl &repl): repl_(repl) {}
     void removeConsumer(GrpcRestrStreamCons *cons);
+    void removeProducer(GrpcRestrStreamProd *prod);
     virtual GrpcStream* newStream(Http2Stream* stream) override;
     virtual void onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code) override;
 };

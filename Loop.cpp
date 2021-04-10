@@ -13,9 +13,9 @@ Loop::Loop(int evcount): run_(false) {
 
 void Loop::run() {
   run_ = true;
-  while(run_) {
+  while (run_) {
     int nfds = epoll_wait(epollfd_, events_, evcount_, -1);
-    if (nfds < 0) {
+    if (nfds < 0 && errno != EINTR) {
       perror("epoll_wait failure\n");
       exit(EXIT_FAILURE);
     }

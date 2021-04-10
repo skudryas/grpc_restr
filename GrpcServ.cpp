@@ -28,6 +28,19 @@ void GrpcServ::onStream(Http2Conn *conn, Http2Stream *stream)
     stream->setDlgt(grpc_stream);
 }
 
+void GrpcServ::onConnected(Http2Conn *conn)
+{
+static const uint8_t window_update_max[13] = { 0x0, 0x0, 0x4, /* 24-bit length */
+                                   (uint8_t)Http2Conn::FrameType::WINDOW_UPDATE,
+                                   0x0, /* Flags */
+                                   0x0, 0x0, 0x0, 0x0, /* stream id */
+                                   0x00, 0x3f, 0x00, 0x01 };
+  Chain::Buffer win_upd = conn->rawOutput().readTo(13);
+  memcpy(win_upd.buf, window_update_max, 13);
+  conn->rawOutput().fill(13);
+  conn->conn()->writeSome();
+}
+
 void GrpcServ::onClosed(Http2Conn *conn)
 {
   assert(1 == conns_.erase(conn));
@@ -92,15 +105,15 @@ static void variant5_encode(uint8_t *p, uint32_t val)
   memset(p, 0, LENGTH_PREFIX_LENGTH);
   int idx = LENGTH_PREFIX_LENGTH;
   while (val && idx) {
-    p[idx - 1] = val & 0xff;
-    val = val >> 8;
+    p[--idx] = val & 0xff;
+    val = (val >> 8);
   }
 }
 
 static uint32_t variant5_decode(uint8_t *p) // unsafe!
 {
   uint32_t ret = 0;
-  for (int idx = 0; idx < LENGTH_PREFIX_LENGTH; ++idx) {
+  for (int idx = 1; idx < LENGTH_PREFIX_LENGTH; ++idx) {
     ret = (ret << 8);
     ret |= p[idx];
   }
@@ -123,25 +136,33 @@ Chain::Buffer GrpcStream::readData(Http2Stream *stream, Chain::Buffer &buf) // r
   if (buf.size != 0) {
     Chain::Buffer lpm_tail = lpm_.readTo(buf.size);
     memcpy(lpm_tail.buf, buf.buf, buf.size);
-    lpm_.fill(lpm_tail.buf);
+    lpm_.fill(buf.size);
+    buf.buf = nullptr; buf.size = 0;
+  } else if (lpm_size_ <= lpm_.size()) {
+    lpm_.drain(lpm_size_);
+    lpm_size_ = 0;
   }
-  buf = lpm_.pullupAll();
 
   if (lpm_size_ == 0) {
-    if (lpm_.size() < LENGTH_PREFIX_LENGTH)
+    if (lpm_.size() < LENGTH_PREFIX_LENGTH) {
+      DLOG(INFO) << "readData(): case 1";
       return ret;
-    lpm_size_ = (size_t)variant5_decode(buf.buf);
-    buf.buf += LENGTH_PREFIX_LENGTH;
-    buf.size -= LENGTH_PREFIX_LENGTH;
+    }
+    Chain::Buffer lpmbuf = lpm_.pullupFrom(LENGTH_PREFIX_LENGTH);
+    lpm_size_ = (size_t)variant5_decode(lpmbuf.buf);
     lpm_.drain(LENGTH_PREFIX_LENGTH);
   }
 
-  ret.buf = buf.buf + LENGTH_PREFIX_LENGTH;
-  ret.size = std::min(buf.size - LENGTH_PREFIX_LENGTH, size);
+  Chain::Buffer wholebuf = lpm_.pullupAll();
 
+  if (wholebuf.size < lpm_size_) {
+    DLOG(INFO) << "readData(): case 2 - " << wholebuf.size << " vs " << lpm_size_;
+    return ret;
+  }
 
-  buf.buf = buf.buf + LENGTH_PREFIX_LENGTH + ret.size;
-  buf.size = buf.size - LENGTH_PREFIX_LENGTH - ret.size;
+  ret.buf = wholebuf.buf;
+  ret.size = lpm_size_;
+  DLOG(INFO) << "readData(): case 3";
   return ret;
 }
 

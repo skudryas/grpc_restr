@@ -14,7 +14,7 @@ std::string& str_tolower(std::string &s) {
 Http2Conn::Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int fd, struct sockaddr *remote,
            struct sockaddr *local, int flags) :
                conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, fd, remote, local, flags))),
-               dlgt_(dlgt), state_(State::CONNECTING)
+               dlgt_(dlgt), state_(State::CONNECTING), pingSent_(false)
 {
   conn_->readSome();
   init();
@@ -127,6 +127,7 @@ bool Http2Conn::sendData(Http2Stream *stream, Chain::Buffer& buf, bool finish) {
   out.buf[8] = stream->streamId() & 0xff;
   memcpy(&out.buf[9], buf.buf, buf.size);
   rawOutput().fill(buf.size + 9);
+  DLOG(INFO) << "SOMETHING WRITTEN!!!!!";
   conn_->writeSome();
   if (finish)
     stream->state() = Http2Stream::State::HALF_CLOSED_LOCAL;
@@ -396,6 +397,8 @@ ssize_t Http2Conn::parseFrame()
       SHOULD_BE_ZERO;
       if (flags & 0x1) {
         state_ = State::CONNECTED;
+        // XXX!!!
+        //dlgt_->onConnected(this);
         break;
         // Just ACK received..
       }
@@ -409,14 +412,35 @@ static const uint8_t ack_settings_hardcode[9] = { 0x0, 0x0, 0x0, /* 24-bit lengt
       memcpy(ack_settings.buf, ack_settings_hardcode, 9);
       rawOutput().fill(9);
 
+#if 1
+static const uint8_t settings_hardcode[] = {
+  0x00, 0x00, 0x18, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04,
+  0x1f, 0x40, 0x00, 0x00, 0x00, 0x05, 0x00, 0x40, 0x00, 0x00, 0x00,
+  0x06, 0x00, 0x00, 0x20, 0x00, 0xfe, 0x03, 0x00, 0x00, 0x00, 0x01 };
+
+#else
 static const uint8_t settings_hardcode[9] = { 0x0, 0x0, 0x0, /* 24-bit length */
                                            (uint8_t)FrameType::SETTINGS,
                                            0x0, /* ACK Flag */
                                            0x0, 0x0, 0x0, 0x0 /* stream id */
                                          };
-      Chain::Buffer my_settings = rawOutput().readTo(9);
-      memcpy(my_settings.buf, settings_hardcode, 9);
-      rawOutput().fill(9);
+#endif
+      Chain::Buffer my_settings = rawOutput().readTo(
+          sizeof(settings_hardcode));
+      memcpy(my_settings.buf, settings_hardcode, sizeof(settings_hardcode));
+      rawOutput().fill(sizeof(settings_hardcode));
+
+#if 1
+static const uint8_t window_update_max[13] = { 0x0, 0x0, 0x4, /* 24-bit length */
+                                   (uint8_t)FrameType::WINDOW_UPDATE,
+                                   0x0, /* Flags */
+                                   0x0, 0x0, 0x0, 0x0, /* stream id */
+                                   0x7f, 0x3f, 0x00, 0x01 };
+      Chain::Buffer win_upd = rawOutput().readTo(13);
+      memcpy(win_upd.buf, window_update_max, 13);
+      rawOutput().fill(13);
+
+#endif
       conn_->writeSome();
       break;
     }
@@ -429,14 +453,15 @@ static const uint8_t settings_hardcode[9] = { 0x0, 0x0, 0x0, /* 24-bit length */
     {
       SHOULD_BE_ZERO;
       if (flags & 0x1) {
-        if (size != sizeof(pingBody_) || memcmp(buf.buf, pingBody_, sizeof(pingBody_))) {
+        if (pingSent_ && (size != sizeof(pingBody_) || memcmp(buf.buf, pingBody_, sizeof(pingBody_)))) {
           handleError(Http2ConnError::INVALID);
           return -1;
         }
+        pingSent_ = false;
         break;
         // Just ack received..
       } else {
-static const uint8_t ack_pong_hardcode[9] = { 0x0, 0x0, 0x40, /* 24-bit length */
+static const uint8_t ack_pong_hardcode[9] = { 0x0, 0x0, 0x8, /* 24-bit length */
                                            (uint8_t)FrameType::PING,
                                            0x1, /* ACK Flag */
                                            0x0, 0x0, 0x0, 0x0 /* stream id */

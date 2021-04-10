@@ -63,7 +63,7 @@ class Http2Conn : public TcpConnDlgt {
            struct sockaddr *local, int flags = 0);
     Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int flags = 0):
           conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, flags))),
-          dlgt_(dlgt), state_(State::WAIT_CONNECT) {
+          dlgt_(dlgt), state_(State::WAIT_CONNECT), pingSent_(false) {
       init();
     }
     virtual ~Http2Conn();
@@ -153,6 +153,7 @@ class Http2Conn : public TcpConnDlgt {
     Http2ConnError lastError_;
     Chain input_; // XXX unused
     State state_;
+    bool pingSent_;
     std::unique_ptr<TcpConn> conn_;
     std::unordered_map<uint32_t, Http2Stream> streams_;
     uint8_t pingBody_[8];
@@ -165,6 +166,7 @@ class Http2ConnDlgt
     // XXX ErrorChain!
     virtual void onError(Http2Conn *conn, const Http2ConnError& error) = 0;
     virtual void onStream(Http2Conn *conn, Http2Stream *stream) = 0;
+    virtual void onConnected(Http2Conn *conn) = 0;
     virtual void onClosed(Http2Conn *conn) = 0;
 };
 

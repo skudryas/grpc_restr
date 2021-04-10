@@ -40,9 +40,13 @@ class deflog /*: public std::ostream */ {
 void set_log_level(LogLevel);
 void set_log_level(int argc, char **argv);
 
+#ifndef QUIETLOG
 #define LOG(__LL) deflog(__LL)
+#else
+#define LOG(__LL) nullog()
+#endif
 
-#ifdef DEBUGLOG
+#if defined(DEBUGLOG) && !defined(QUIETLOG)
 #define DLOG(__LL) deflog(__LL)
 #else
 #define DLOG(__LL) nullog()

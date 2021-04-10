@@ -10,7 +10,7 @@ class GrpcStream: public Http2StreamDlgt {
     virtual void onRead(Http2Stream *, Chain::Buffer&) override = 0;
     virtual void onTrailer(Http2Stream *) override = 0;
     virtual void onClosed(Http2Stream *) override = 0;
-    GrpcStream(): lpm_size(0) {}
+    GrpcStream(): lpm_size_(0) {}
     virtual ~GrpcStream() override;
     bool checkHeaders(Http2Stream *stream);
     bool writeHeaders(Http2Stream *stream, int code, bool doclose);
@@ -19,7 +19,7 @@ class GrpcStream: public Http2StreamDlgt {
     Chain::Buffer readData(Http2Stream *stream, Chain::Buffer &buf);
     const std::string& serviceName() const { return service_name_; }
     const std::string& messageType() const { return message_type_; }
-  private:
+  protected:
     // GrpcStream extracted
     std::string service_name_;
     std::string message_type_;
@@ -41,6 +41,7 @@ class GrpcServ: public Http2ConnDlgt {
     // Http2ConnDlgt
     virtual void onError(Http2Conn *conn, const Http2ConnError& error) override;
     virtual void onStream(Http2Conn *conn, Http2Stream *stream) override;
+    virtual void onConnected(Http2Conn *conn) override;
     virtual void onClosed(Http2Conn *conn) override;
     // GrpcAccept
     TcpAcceptDlgt *acceptDlgt() {
