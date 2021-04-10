@@ -7,6 +7,9 @@
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+#include <streambuf>
+
+#include <iostream>
 
 extern const int g_pagesize;
 
@@ -77,6 +80,7 @@ class Chain {
     Chain(): size_(0), blockSize_(g_pagesize) {}
     size_t size() const { return size_; }
     size_t& blockSize() { return blockSize_; }
+    std::list<Dh> &chain() { return chain_; }
     struct Buffer {
       uint8_t *buf;
       size_t size;
@@ -121,8 +125,8 @@ class Chain {
           chain_.emplace_front(dh);
         } else {
           // Сase 2. Move to front node
-          chain_.front().pullup();
           while (chain_.front().size() < atleast) {
+            chain_.front().pullup();
             Buffer w{ chain_.front().tail(), chain_.front().space() }; // XXX why back().space() ???
             auto nextchain = ++chain_.begin();
             assert(nextchain != chain_.end());
@@ -159,6 +163,9 @@ class Chain {
       return size;
     }
     void fill(size_t size) {
+      if (!size) {
+        return;
+      }
       Dh &back = chain_.back();
       back.fill(size);
       size_ += size;
@@ -171,5 +178,55 @@ class Chain {
       size_ += v.size();
       chain_.emplace_back(std::move(v));
     }
+    class StreamBuf: public std::streambuf {
+      private:
+        Chain &chain_;
+      public:
+        StreamBuf(Chain &chain): chain_(chain) {
+        }
+        virtual ~StreamBuf() {
+          chain_.fill(epptr() - pptr());
+          chain_.drain(gptr() - eback());
+        }
+      protected:
+        // get
+        virtual std::streambuf::int_type underflow() override {
+          char *gptr1 = gptr(), *egptr1 = egptr(), *eback1 = eback();
+          if (gptr() == egptr()) {
+            Buffer buf = chain_.writeFrom();
+            if (buf.buf == nullptr) {
+              return std::streambuf::traits_type::eof();
+            }
+            if (buf.buf == (uint8_t*)eback()) {
+              chain_.drain(gptr() - eback());
+              buf = chain_.writeFrom();
+            }
+            if (buf.buf == nullptr) {
+              return std::streambuf::traits_type::eof();
+            }
+            setg((char*)buf.buf, (char*)buf.buf, (char*)(buf.buf + buf.size));
+          } else {
+            assert(0); // Unexpected call...
+          }
+          return *gptr();
+        }
+        // put
+        virtual std::streambuf::int_type overflow( std::streambuf::int_type ch = std::streambuf::traits_type::eof() ) override {
+          Buffer buf = chain_.readTo();
+          if (pptr() == (char*)(buf.buf + buf.size) || pptr() == nullptr) {
+            if (pptr() != nullptr) {
+              chain_.fill(buf.size);
+              buf = chain_.readTo();
+            }
+            setp((char*)(buf.buf + 1), (char*)(buf.buf + buf.size));
+            if (ch != std::streambuf::traits_type::eof()) {
+              *buf.buf = ch;
+            }
+          } else {
+            assert(0); // Unexpected call...
+          }
+          return ch;
+        }
+    };
 };
 
