@@ -11,7 +11,16 @@ TcpConn::TcpConn(Loop *loop, TcpConnDlgt *dlgt, int fd, struct sockaddr *remote,
            rpfirst_(nullptr) {
   assert(loop != 0);
   assert(local != NULL && remote != NULL);
+  assert(fd != -1);
   fd_ = fd;
+
+  int tcp_nodelay = 1;
+  if (0 != setsockopt(fd_, SOL_TCP, TCP_NODELAY, &tcp_nodelay,
+        (socklen_t)sizeof(tcp_nodelay))) {
+    ERROR(SOCKET);
+    return;
+  }
+
   memcpy(&localAddr_, local, SOCKADDR_SIZE(local));
   memcpy(&remoteAddr_, remote, SOCKADDR_SIZE(remote));
 
@@ -71,6 +80,13 @@ void TcpConn::tryConnect() {
       ERROR(SOCKET);
       return;
     }
+
+    int tcp_nodelay = 1;
+    if (0 != setsockopt(fd_, SOL_TCP, TCP_NODELAY, &tcp_nodelay,
+          (socklen_t)sizeof(tcp_nodelay))) {
+      ERROR(SOCKET);
+      return;
+    }
  
     if (::connect(fd_, rp_->ai_addr, rp_->ai_addrlen) < 0) {
       if (errno == EINPROGRESS) {
@@ -107,11 +123,14 @@ void TcpConn::tryConnect() {
 
 void TcpConn::writeSome() {
   assert(state_ == State::CONNECTED);
-  Task newset = (Task)(taskset_ | Task::OUT);
-  if (taskset_ != newset) {
-    taskset_ = newset;
-    if (!loop_->modifyTask(taskset_, this)) {
-      ERROR(WRITE);
+  if (directWrite()) {
+    Task newset = (Task)(taskset_ | Task::OUT);
+    if (taskset_ != newset) {
+      DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
+      taskset_ = newset;
+      if (!loop_->modifyTask(taskset_, this)) {
+        ERROR(WRITE);
+      }
     }
   }
 }
@@ -120,6 +139,7 @@ void TcpConn::readSome() {
   assert(state_ == State::CONNECTED);
   Task newset = (Task)(taskset_ | Task::IN);
   if (taskset_ != newset) {
+    DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
     taskset_ = newset;
     if (!loop_->modifyTask(taskset_, this)) {
       ERROR(READ);
@@ -131,8 +151,9 @@ void TcpConn::readStop() {
   assert(state_ == State::CONNECTED);
   Task newset = (Task)(taskset_ & (~Task::IN));
   if (taskset_ != newset) {
+    DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
     taskset_ = newset;
-    if(!loop_->modifyTask(taskset_, this)) {
+    if (!loop_->modifyTask(taskset_, this)) {
       ERROR(READ);
     }
   }
@@ -148,8 +169,10 @@ void TcpConn::closeSoon() {
     }
     closeNow();
   } else {
+    DLOG(DEBUG) << "close soon, flushing...";
     Task newset = (Task)((taskset_ & (~Task::IN)) | Task::OUT);
     if (taskset_ != newset) {
+      DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
       taskset_ = newset;
       if (!loop_->modifyTask(taskset_, this)) {
         ERROR(CLOSE);
@@ -169,8 +192,57 @@ void TcpConn::closeNow() {
   fd_ = -1;
   if (state_ != State::CONNECTING) {
     state_ = State::CLOSED;
+    DLOG(DEBUG) << "closing tcp conn";
     if (dlgt_) dlgt_->onClosed(this);
   }
+}
+
+bool TcpConn::directWrite() {
+  int ret = 0;
+  do {
+    Chain::Buffer buf = output_.writeFrom();
+    if (buf.size > 0) {
+      ret = write(fd_, buf.buf, buf.size);
+    }
+    if (ret < 0) {
+      if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (state_ == State::FLUSHING) {
+          closeNow();
+          return false;
+        }
+        ERROR(WRITE);
+        return false;
+      } else {
+        return true;
+      }
+    } else {
+      if (ret > 0) {
+        if (dlgt_) dlgt_->onWrite(this, Chain::Buffer{buf.buf, (size_t)ret});
+        output_.drain(ret);
+      }
+      if (output_.size() == 0) {
+        Task newset = (Task)(taskset_ & (~Task::OUT));
+        if (taskset_ != newset) {
+          taskset_ = newset;
+          DLOG(DEBUG) << "directWrite taskset = " << taskset_<< " fd = " << fd() << " ptr = " << this;
+          if (!loop_->modifyTask(taskset_, this)) {
+            ERROR(WRITE);
+            return false;
+          }
+        }
+        if (state_ == State::FLUSHING) {
+          if (0 != shutdown(fd_, SHUT_WR)) {
+            ERROR(CLOSE);
+            return false;
+          }
+          closeNow();
+          return false;
+        }
+        return false;
+      }
+    }
+  } while (ret > 0);
+  return false; /* NEVER REACHED */
 }
 
 void TcpConn::onEvent(Task evt) {
@@ -201,7 +273,6 @@ void TcpConn::onEvent(Task evt) {
         total_read += ret;
         input_.fill(ret);
         if (ret < buf.size) {
-
           break;
         }
         ++readWinShift_;
@@ -242,39 +313,7 @@ void TcpConn::onEvent(Task evt) {
     }
     // Connected
     if (state_ == State::CONNECTED || state_ == State::FLUSHING) {
-      Chain::Buffer buf = output_.writeFrom();
-      int ret = 0;
-      if (buf.size > 0) {
-        ret = write(fd_, buf.buf, buf.size);
-      }
-      if (ret < 0) {
-        if (state_ == State::FLUSHING) {
-          closeNow();
-          return;
-        }
-        ERROR(WRITE);
-        return;
-      } else {
-        if (ret > 0) {
-          if (dlgt_) dlgt_->onWrite(this, Chain::Buffer{buf.buf, (size_t)ret});
-          output_.drain(ret);
-        }
-        if (output_.size() == 0) {
-          taskset_ = (Task)(taskset_ & (~Task::OUT));
-          if (!loop_->modifyTask(taskset_, this)) {
-            ERROR(WRITE);
-            return;
-          }
-          if (state_ == State::FLUSHING) {
-            if (0 != shutdown(fd_, SHUT_WR)) {
-              ERROR(CLOSE);
-              return;
-            }
-            closeNow();
-            return;
-          }
-        }
-      }
+      (void)directWrite();
     }
   }
 }

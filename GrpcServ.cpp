@@ -30,15 +30,7 @@ void GrpcServ::onStream(Http2Conn *conn, Http2Stream *stream)
 
 void GrpcServ::onConnected(Http2Conn *conn)
 {
-static const uint8_t window_update_max[13] = { 0x0, 0x0, 0x4, /* 24-bit length */
-                                   (uint8_t)Http2Conn::FrameType::WINDOW_UPDATE,
-                                   0x0, /* Flags */
-                                   0x0, 0x0, 0x0, 0x0, /* stream id */
-                                   0x00, 0x3f, 0x00, 0x01 };
-  Chain::Buffer win_upd = conn->rawOutput().readTo(13);
-  memcpy(win_upd.buf, window_update_max, 13);
-  conn->rawOutput().fill(13);
-  conn->conn()->writeSome();
+  /* NO-OP */
 }
 
 void GrpcServ::onClosed(Http2Conn *conn)
@@ -55,6 +47,8 @@ void GrpcServ::gotError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code)
 {
   provider_->onError(acc, error, code);
 }
+
+GrpcServ::~GrpcServ() {}
 
 bool GrpcStream::checkHeaders(Http2Stream *stream)
 {

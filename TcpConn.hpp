@@ -27,7 +27,7 @@ public:
   }
   ~AtomicUnlock()
   {
-    a_.clear(std::memory_order_relaxed);
+    a_.clear(/*std::memory_order_relaxed*/);
   }
 };
 
@@ -51,8 +51,8 @@ class TcpConn : public Conn {
     void readStop();
     void writeSome();
     void readSome();
-    void closeSoon(); // use this
-    void closeNow(); // don't use this
+    void closeSoon(); // use this - graceful close
+    void closeNow(); // don't use this - force close
     virtual void onEvent(Task) override;
     enum class State {
       WAIT_CONNECT = 1,
@@ -77,6 +77,7 @@ class TcpConn : public Conn {
       return output_;
     }
   private:
+    bool directWrite(); // true if need polling
 #ifdef THREADED_POLLING
     std::atomic_flag inEvent_ = ATOMIC_FLAG_INIT;
 #endif

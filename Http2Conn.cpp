@@ -14,7 +14,7 @@ std::string& str_tolower(std::string &s) {
 Http2Conn::Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int fd, struct sockaddr *remote,
            struct sockaddr *local, int flags) :
                conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, fd, remote, local, flags))),
-               dlgt_(dlgt), state_(State::CONNECTING), pingSent_(false)
+               dlgt_(dlgt), state_(State::CONNECTING), pingSent_(false), loop_(loop)
 {
   conn_->readSome();
   init();
@@ -127,12 +127,10 @@ bool Http2Conn::sendData(Http2Stream *stream, Chain::Buffer& buf, bool finish) {
   out.buf[8] = stream->streamId() & 0xff;
   memcpy(&out.buf[9], buf.buf, buf.size);
   rawOutput().fill(buf.size + 9);
-  DLOG(INFO) << "SOMETHING WRITTEN!!!!!";
+  DLOG(DEBUG) << "SOMETHING WRITTEN!!!!!";
   conn_->writeSome();
   if (finish)
     stream->state() = Http2Stream::State::HALF_CLOSED_LOCAL;
-  return true;
-
   return true;
 }
 
@@ -175,6 +173,7 @@ void Http2Conn::onConnected(TcpConn *conn)
 
 void Http2Conn::onClosed(TcpConn *conn)
 {
+  DLOG(DEBUG) << "Http2Conn::onClosed, state = " << (int)state_;
   if (state_ == State::CLOSED) {
     if (dlgt_)
       dlgt_->onClosed(this);
@@ -291,11 +290,48 @@ ssize_t Http2Conn::parseFrame()
       GET_STREAM;
       SHOULD_BE_OPEN;
 
+#if 1
+      {
+        Chain::Buffer win_upd = rawOutput().readTo(13);
+static const uint8_t window_update_cur[13] = { 0x0, 0x0, 0x4, /* 24-bit length */
+                                   (uint8_t)FrameType::WINDOW_UPDATE,
+                                   0x0, /* Flags */
+                                   0x0, 0x0, 0x0, 0x0, /* stream id */
+                                   0x7f, 0x3f, 0x00, 0x01 };
+        memcpy(win_upd.buf, window_update_cur, 13);
+        win_upd.buf[5] = (stream.streamId() >> 24) & 0xff;
+        win_upd.buf[6] = (stream.streamId() >> 16) & 0xff;
+        win_upd.buf[7] = (stream.streamId() >> 8) & 0xff;
+        win_upd.buf[8] = stream.streamId() & 0xff;
+        win_upd.buf[9] = (buf.size >> 24) & 0xff;
+        win_upd.buf[10] = (buf.size >> 16) & 0xff;
+        win_upd.buf[11] = (buf.size >> 8) & 0xff;
+        win_upd.buf[12] = buf.size & 0xff;
+        rawOutput().fill(13);
+      }
+#endif
+
+#if 0
+      {
+        Chain::Buffer win_upd = rawOutput().readTo(13);
+static const uint8_t window_update_cur[13] = { 0x0, 0x0, 0x4, /* 24-bit length */
+                                   (uint8_t)FrameType::WINDOW_UPDATE,
+                                   0x0, /* Flags */
+                                   0x0, 0x0, 0x0, 0x0, /* stream id */
+                                   0x7f, 0x3f, 0x00, 0x01 };
+        memcpy(win_upd.buf, window_update_cur, 13);
+        win_upd.buf[9] = (buf.size >> 24) & 0xff;
+        win_upd.buf[10] = (buf.size >> 16) & 0xff;
+        win_upd.buf[11] = (buf.size >> 8) & 0xff;
+        win_upd.buf[12] = buf.size & 0xff;
+        rawOutput().fill(13);
+      }
+#endif
+
       if (flags & 0x8) {
         ssize_t padding = buf.buf[0];
         buf = Chain::Buffer{&buf.buf[1], buf.size - 1 - padding};
       }
-
       DLOG(DEBUG) << "Calling onRead()";
       if (stream.dlgt()) {
         DLOG(DEBUG) << "Calling onRead() 2";
@@ -398,7 +434,7 @@ ssize_t Http2Conn::parseFrame()
       if (flags & 0x1) {
         state_ = State::CONNECTED;
         // XXX!!!
-        //dlgt_->onConnected(this);
+        dlgt_->onConnected(this);
         break;
         // Just ACK received..
       }
@@ -605,11 +641,14 @@ void Http2Conn::handleClose()
   if (state_ != State::CLOSED) {
     conn_->closeSoon();
   }
+  DLOG(DEBUG) << "Http2Conn::handleClose()";
   state_ = State::CLOSED;
   for (auto& i: streams_) {
     i.second.state() = Http2Stream::State::CLOSED;
-    if (i.second.dlgt())
+    if (i.second.dlgt()) {
+      DLOG(DEBUG) << "Http2Conn::handleClose(): closing stream";
       i.second.dlgt()->onClosed(&i.second);
+    }
   }
 }
 

@@ -14,8 +14,11 @@ class Async : public Conn {
     virtual ~Async();
     virtual void onEvent(Task) override;
     void setAsync();
-    void stopAsync();
+    uint64_t stopAsync();
+    void disableAsync();
+    bool disabled() const { return disabled_; }
   private:
+    bool disabled_;
     AsyncDlgt *dlgt_;
 };
 

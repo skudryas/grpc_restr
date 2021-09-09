@@ -46,10 +46,11 @@ using counter_t = size_t;
 
 #define g_repl_tid1 g_repl_tid // 0
 
-#define REPL_DEBUG
+//#define REPL_DEBUG
 //#define REPL_VDEBUG
 //#define REPL_NO_UNINDEX
-#define SERV_THREAD_NUM 0 // 3
+#define SERV_THREAD_NUM 4 // 0
+//#define USE_CONCURRENT_QUEUE 1
 
 class Counter
 {
@@ -90,7 +91,7 @@ struct Pattern
   } 
 };
 
-struct Consumer: public std::enable_shared_from_this<Consumer>
+struct Consumer /*: public std::enable_shared_from_this<Consumer> */
 {
   Consumer(size_t num): cnt(num)
   {
@@ -102,7 +103,9 @@ struct Consumer: public std::enable_shared_from_this<Consumer>
   Counter cnt;
   virtual void consume(const std::string &key, const std::string &data)
   {
+#ifdef REPL_DEBUG
     assert(0);
+#endif
     // TODO
   }
 };
@@ -110,6 +113,8 @@ struct Consumer: public std::enable_shared_from_this<Consumer>
 class Repl
 {
   private:
+    size_t consumed_;
+    size_t forwarded_;
     std::shared_mutex rwmtx_;
     std::unordered_map<std::string, Pattern*> patterns_;
     std::unordered_set<Consumer*> consumers_;
@@ -210,12 +215,11 @@ class Repl
       for (size_t i = 0; i < tokens_count; ++i) {
         // 2. Ищем токен в индексе. Его может не быть!
         auto tok = index_.find(out[i]);
-        //std::cout << "try find " << out[i] << std::endl;
         if (tok == index_.end()) {
-          std::cout << "not found while index size = " << index_.size() << std::endl;
+          //std::cout << "not found while index size = " << index_.size() << std::endl;
           continue;
         } else {
-          std::cout << "FOUND " << out[i] << std::endl;
+          //std::cout << "FOUND " << out[i] << std::endl;
         }
         // 3. Нам нужен токен, у которого меньше всего паттернов, мы хотим матчить поменьше
         if (best_size == 0 || best_size > tok->second.size()) {
@@ -229,11 +233,13 @@ class Repl
       return best;
     }
   public:
+    size_t consumed() const { return consumed_; }
+    size_t forwarded() const { return forwarded_; }
     void printStat() const {
 //    std::cout << "T: " << g_repl_tid1 << " patterns=" << patterns_.size() << " consumers=" << consumers_.size() << std::endl;
     }
     Repl(size_t num = 1):
-      cnt_(num), numthreads_(num) {
+      consumed_(0), forwarded_(0), cnt_(num), numthreads_(num) {
       consumers_.max_load_factor(1);
       consumers_.reserve(512);
       patterns_.max_load_factor(1);
@@ -245,8 +251,8 @@ class Repl
     }
     void addConsumer(Consumer *cons)
     {
-#if SERV_THREAD_NUM > 0
-//      std::unique_lock lock(rwmtx_);
+#if SERV_THREAD_NUM > 1
+      std::unique_lock lock(rwmtx_);
 #endif
 #ifdef REPL_DEBUG
       assert(!consumers_.count(cons));
@@ -265,8 +271,9 @@ class Repl
     }
     void removeConsumer(Consumer *cons)
     {
-#if SERV_THREAD_NUM > 0
-//      std::unique_lock lock(rwmtx_);
+      //std::cout << "consumer removed" << std::endl;
+#if SERV_THREAD_NUM > 1
+      std::unique_lock lock(rwmtx_);
 #endif
 #ifdef REPL_VDEBUG
       bool dump = false;
@@ -276,7 +283,7 @@ class Repl
       }
 #endif 
 #ifdef REPL_PROFILE
-      if (consumers_.size() == 500) {
+      if (consumers_.size() == 500 || consumers_.size() == 100) {
         ProfilerStop();
       }
 #endif
@@ -301,7 +308,7 @@ class Repl
         }
 #endif
       }
-      // XXX END
+      // XXX STOP
       consumers_.erase(cons);
 #ifdef REPL_VDEBUG
       if (dump) {
@@ -316,19 +323,22 @@ class Repl
       if (Match::Result::Yes == Match::Match(key.c_str(), pat->val.c_str())) {
         for (auto &cons: pat->consumers) {
           if (cons->cnt == cnt_) {
+            std::cout << "consume5" << std::endl;
             continue;
           }
           cons->cnt = cnt_;
           cons->consume(key, data);
+          forwarded_++;
         }
       }
     }
 
     void consume(const std::string &key, const std::string &data)
     {
-#if SERV_THREAD_NUM > 0
+#if SERV_THREAD_NUM > 1
       std::shared_lock lock(rwmtx_);
 #endif
+      ++consumed_;
 #ifdef REPL_VDEBUG
       INIT_ELAPSED;
 #endif
@@ -337,14 +347,13 @@ class Repl
 
       auto *patterns = reindexToken(key);
       if (patterns) {
-        std::cout << "consume3" << std::endl;
 #ifdef REPL_VDEBUG
         if (consumers_.size() > 500) {
           std::cout << "patterns count: " << patterns->size() << std::endl;
         }
 #endif
         for (Pattern *pat: *patterns) {
-          std::cout << "consume4" << std::endl;
+          //std::cout << "consume4" << std::endl;
           tryConsume(key, data, pat);
         }
       }
@@ -361,7 +370,7 @@ class Repl
     template <typename Iterable>
     void subscribeBatch(Consumer *cons, const Iterable &pats)
     {
-#if SERV_THREAD_NUM > 0
+#if SERV_THREAD_NUM > 1
       std::unique_lock lock(rwmtx_);
 #endif
       // 1. Ищем паттерн
@@ -372,7 +381,7 @@ class Repl
 
     void subscribe(Consumer *cons, const std::string &pat)
     {
-#if SERV_THREAD_NUM > 0
+#if SERV_THREAD_NUM > 1
       std::unique_lock lock(rwmtx_);
 #endif
       subscribeUnlocked(cons, pat);
@@ -381,11 +390,10 @@ class Repl
     template <typename Iterable>
     void unsubscribeBatch(Consumer *cons, const Iterable &pats)
     {
-#if SERV_THREAD_NUM > 0
+#if SERV_THREAD_NUM > 1
       std::unique_lock lock(rwmtx_);
 #endif
       for (auto &pat: pats) {
-        //std::cout << "T: " << g_repl_tid1 << " UNSUBSCRIBE:" << pat << std::endl;
         // 1. Ищем паттерн
         unsubscribeUnlocked(cons, pat);
       }
@@ -393,7 +401,7 @@ class Repl
 
     void unsubscribe(Consumer *cons, const std::string &pat)
     {
-#if SERV_THREAD_NUM > 0
+#if SERV_THREAD_NUM > 1
       std::unique_lock lock(rwmtx_);
 #endif
       unsubscribeUnlocked(cons, pat);
@@ -401,8 +409,8 @@ class Repl
 
     void subscribeUnlocked(Consumer *cons, const std::string &pat)
     {
-      //std::cout << "T: " << g_repl_tid1 << " SUBSCRIBE:" << pat << std::endl;
-
+      if (!consumers_.count(cons))
+        return;
       // 1. Ищем паттерн
       auto it = patterns_.find(pat);
       // 2. Если его нет - добавляем
@@ -432,6 +440,8 @@ class Repl
 
     void unsubscribeUnlocked(Consumer *cons, const std::string &pat)
     {
+      if (!consumers_.count(cons))
+        return;
       //std::cout << "T: " << g_repl_tid1 << " UNSUBSCRIBE:" << pat << std::endl;
       // 1. Ищем паттерн
       auto it = patterns_.find(pat);

@@ -1,20 +1,23 @@
 COMMON_CC_FLAGS_DEBUG = -Werror -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fno-omit-frame-pointer -DDEBUGLOG -fsanitize=address -O0
 COMMON_LD_FLAGS_DEBUG = -lasan -pthread
 
-COMMON_CC_FLAGS_PROF = -Werror -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fno-omit-frame-pointer -DDEBUGLOG -DGRPC_RESTR_PROFILE -O0
+COMMON_CC_FLAGS_PROF = -Werror -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fno-omit-frame-pointer -DGRPC_RESTR_PROFILE -DDEBUGLOG -O3
 COMMON_LD_FLAGS_PROF = -pthread -ltcmalloc -lprofiler
 
 COMMON_CC_FLAGS_RELEASE = -Werror -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fno-omit-frame-pointer -DQUIETLOG -O3
 COMMON_LD_FLAGS_RELEASE = -pthread -ltcmalloc
 
-COMMON_CC_FLAGS = $(COMMON_CC_FLAGS_RELEASE)
-COMMON_LD_FLAGS = $(COMMON_LD_FLAGS_RELEASE)
+#COMMON_CC_FLAGS = $(COMMON_CC_FLAGS_DEBUG)
+#COMMON_LD_FLAGS = $(COMMON_LD_FLAGS_DEBUG)
+
+COMMON_CC_FLAGS = $(COMMON_CC_FLAGS_PROF)
+COMMON_LD_FLAGS = $(COMMON_LD_FLAGS_PROF)
 
 #COMMON_CC_FLAGS = $(COMMON_CC_FLAGS_RELEASE)
 #COMMON_LD_FLAGS = $(COMMON_LD_FLAGS_RELEASE)
 
 BASE_OBJS = TcpAccept.o TcpConn.o Loop.o Chain.o Log.o Timer.o Async.o
-GRPC_OBJS = Http2Conn.o GrpcServ.o
+GRPC_OBJS = Http2Conn.o GrpcServ.o GrpcMultiAccept.o
 
 GRPC_DEFAULT_OBJS = GrpcDefault.o default.pb.o
 GRPC_DEFAULT_PBS = default.pb.cc default.pb.h

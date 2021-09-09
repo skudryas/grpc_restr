@@ -1,4 +1,5 @@
 #include <iostream>
+#include <sys/time.h>
 
 class nullog /*: public std::ostream*/ {
   public:
@@ -25,7 +26,18 @@ class deflog /*: public std::ostream */ {
   private:
     LogLevel ll_;
   public:
-    deflog(LogLevel ll): ll_(ll) {}
+    deflog(LogLevel ll, const char *func, int line): ll_(ll) {
+      if (g_loglevel >= ll_) {
+        struct timeval ntv;
+        gettimeofday(&ntv, NULL);
+        struct tm now_tm;
+        localtime_r(&ntv.tv_sec, &now_tm);
+        char timebuf[256];
+        int timelen = strftime(timebuf, 256, "%b %e %T", &now_tm);
+        snprintf(&timebuf[timelen], 32, ".%04d", ((int)ntv.tv_usec) / 100);
+        std::cout << timebuf << " " << func << ":" << line << " ";
+      }
+    }
     template<typename T>
     deflog& operator<<(const T& t) {
       if (g_loglevel >= ll_)
@@ -41,13 +53,13 @@ void set_log_level(LogLevel);
 void set_log_level(int argc, char **argv);
 
 #ifndef QUIETLOG
-#define LOG(__LL) deflog(__LL)
+#define LOG(__LL) deflog(__LL, __func__, __LINE__)
 #else
 #define LOG(__LL) nullog()
 #endif
 
 #if defined(DEBUGLOG) && !defined(QUIETLOG)
-#define DLOG(__LL) deflog(__LL)
+#define DLOG(__LL) deflog(__LL, __func__, __LINE__)
 #else
 #define DLOG(__LL) nullog()
 #endif

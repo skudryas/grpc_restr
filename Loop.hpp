@@ -3,7 +3,7 @@
 #include <sys/epoll.h>
 #include "Log.hpp"
 
-#define THREADED_POLLING
+//#define THREADED_POLLING
 
 enum Task: unsigned int {
   NONE = 0,

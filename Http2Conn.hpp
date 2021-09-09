@@ -62,7 +62,7 @@ class Http2Conn : public TcpConnDlgt {
     Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int fd, struct sockaddr *remote,
            struct sockaddr *local, int flags = 0);
     Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int flags = 0):
-          conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, flags))),
+          conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, flags))), loop_(loop),
           dlgt_(dlgt), state_(State::WAIT_CONNECT), pingSent_(false) {
       init();
     }
@@ -90,7 +90,8 @@ class Http2Conn : public TcpConnDlgt {
       return input_; // XXX unused
     }
     Http2ConnDlgt *dlgt() { return dlgt_; }
-    TcpConn* conn() { return conn_.get(); }
+    TcpConn *conn() { return conn_.get(); }
+    Loop *loop() { return loop_; }
 
     // Enums
     enum class State {
@@ -147,6 +148,7 @@ class Http2Conn : public TcpConnDlgt {
     void handleClose();
     bool parseHeaders(Http2Stream& stream, Chain::Buffer& buf);
 
+    Loop *loop_;
     nghttp2_hd_inflater *nghdinflater_; // decoding headers
     nghttp2_hd_deflater *nghddeflater_; // encoding headers
     Http2ConnDlgt *dlgt_; // weak
@@ -168,6 +170,7 @@ class Http2ConnDlgt
     virtual void onStream(Http2Conn *conn, Http2Stream *stream) = 0;
     virtual void onConnected(Http2Conn *conn) = 0;
     virtual void onClosed(Http2Conn *conn) = 0;
+    virtual ~Http2ConnDlgt() {}
 };
 
 class Http2StreamDlgt

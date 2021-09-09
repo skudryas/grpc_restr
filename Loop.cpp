@@ -22,7 +22,7 @@ void Loop::run() {
     for (int n = 0; n < nfds; ++n) {
       Conn *c = (Conn*)events_[n].data.ptr;
       assert(c != 0);
-      DLOG(DEBUG) << "gotEvent for " << c->fd() << " event=" << events_[n].events;
+      //DLOG(DEBUG) << "gotEvent for " << c->fd() << " event=" << events_[n].events;
       c->onEvent((Task)events_[n].events);
     }
   }
@@ -50,6 +50,7 @@ bool Loop::removeTask(Conn *ptr)
 {
   struct epoll_event ev;
   ev.data.ptr = ptr;
+  DLOG(DEBUG) << "deleteTask fd: " << ptr->fd() << " ptr: " << ptr;
   return -1 != epoll_ctl(epollfd_, EPOLL_CTL_DEL, ptr->fd(), &ev);
 }
 

@@ -48,6 +48,10 @@ void GrpcRestrProvider::removeConsumer(GrpcRestrStreamCons *cons)
   if (profiling_ && consumers_.empty()) {
     ProfilerStop();
     profiling_ = false;
+    LOG(ALERT) << "AsyncConsumed in: " << repl_.asyncConsumed();
+    LOG(ALERT) << "Consumed in: " << repl_.consumed();
+    LOG(ALERT) << "Forwarded out " << repl_.forwarded();
+    LOG(ALERT) << "AsyncForwarded out " << repl_.asyncForwarded();
   }
 #endif
 }
@@ -77,11 +81,11 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
 {
   if (buf.size == 0)
     return;
-  DLOG(INFO) << "Readed buffer " << buf.size;
+  DLOG(DEBUG) << "Readed buffer " << buf.size;
   while (true) {
     Chain::Buffer pb = readData(stream, buf);
     if (!pb.size) {
-      DLOG(INFO) << "onRead() in producer stream: can't parse, buf.size=" << buf.size <<
+      DLOG(DEBUG) << "onRead() in producer stream: can't parse, buf.size=" << buf.size <<
         " lpm size=" << lpm_.size() << " lpm= " << lpm_size_;
       break;
     }
@@ -94,7 +98,7 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
       return;
     } else {
       lpm_size_ = 0;
-      DLOG(INFO) << "onRead() in producer stream: parsed successfully, ByteSize()="
+      DLOG(DEBUG) << "onRead() in producer stream: parsed successfully, ByteSize()="
         << request_.ByteSizeLong() << " pb.size=" << pb.size << " lpm size=" << lpm_.size() << " lpm= " << lpm_size_;
     }
 #else
@@ -111,18 +115,22 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
         << request_.ByteSizeLong() << " pb.size=" << pb.size << " lpm size=" << lpm_.size() << " lpm= " << lpm_size_;
     }
 #endif
-    DLOG(INFO) << "got PRODUCE:" << request_.key();
-    repl_.consume(request_.key(), request_.payload());
+    {
+/*      INIT_ELAPSED;
+      DLOG(ALERT) << std::fixed << __start << " got PRODUCE:" << request_.key();*/
+    }
+    repl_.consumeAsync(request_.key(), request_.payload());
   }
 }
 
 void GrpcRestrStreamProd::onTrailer(Http2Stream *stream)
 {
-  DLOG(INFO) << "onTrailer";
+  DLOG(DEBUG) << "onTrailer";
 }
 
 void GrpcRestrStreamProd::onClosed(Http2Stream *stream)
 {
+  DLOG(INFO) << "got close id: " << stream->streamId();
   prov_->removeProducer(this);
 }
 
@@ -163,11 +171,11 @@ void GrpcRestrStreamCons::onRead(Http2Stream *stream, Chain::Buffer& buf)
         for (auto &i : request_.keys()) {
           DLOG(DEBUG) << i;
         }
-        repl_.subscribeBatch(&cons_, request_.keys());
+        repl_.subscribeBatchAsync(&cons_, std::move(request_));
         break;
       case mbproto::ConsumeRequest::UNSUBSCRIBE:
         DLOG(INFO) << "got UNSUBSCRIBE";
-        repl_.unsubscribeBatch(&cons_, request_.keys());
+        repl_.unsubscribeBatchAsync(&cons_, std::move(request_));
         break;
       default:
         /* NO-OP */
@@ -184,22 +192,78 @@ void GrpcRestrStreamCons::onTrailer(Http2Stream *stream)
 
 void GrpcRestrStreamCons::onClosed(Http2Stream *stream)
 {
+  DLOG(INFO) << "Cons: closed";
   prov_->removeConsumer(this);
-  DLOG(DEBUG) << "Cons: closed";
 }
 
 void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const std::string &data)
 {
-#ifdef THREADED_POLLING
-  std::unique_lock lock(wmtx_);
+/*  {
+    INIT_ELAPSED;
+    DLOG(ALERT) << std::fixed <<  __start << " consume pushed to async, key = " << key;
+  }*/
+  async_.pushData(key, data);
+}
+
+void GrpcRestrStreamCons::AsyncConsumer::onError(Async *async, Error error, int code)
+{
+  assert(false);
+}
+
+void GrpcRestrStreamCons::AsyncConsumer::onAsync(Async *async)
+{
+#ifdef USE_CONCURRENT_QUEUE
+  std::string tmp;
+  while (cq_.try_dequeue(tmp)) {
+    Chain::Buffer outbuf;
+    outbuf.buf = (uint8_t*)tmp.data(); outbuf.size = tmp.size();
+    cons_.writeData(cons_.stream(), outbuf, false);
+  }
+#else
+  std::list<std::string> l;
+  {
+    std::unique_lock lock(mtx_);
+    l.splice(l.begin(), queue_);
+  }
+  for (auto &i : l) {
+/*    {
+      const char *p = i.data() + 5;
+      std::string tmp;
+      if (i.size() > 5 + 6) {
+        tmp.append(p, 6);
+      }
+      INIT_ELAPSED;
+      DLOG(ALERT) << std::fixed << __start << " on async, key = " << tmp;
+    }*/
+    cons_.repl().incrementAsyncForwarded();
+    Chain::Buffer outbuf;
+    outbuf.buf = (uint8_t*)i.data(); outbuf.size = i.size();
+    cons_.writeData(cons_.stream(), outbuf, false);
+  }
+  l.clear();
 #endif
-  DLOG(DEBUG) << "CONSUME!!!!!!";
-  response_.set_key(key);
-  response_.set_payload(data);
+}
+
+
+void GrpcRestrStreamCons::AsyncConsumer::pushData(const std::string &key, const std::string &data)
+{
+  if (async_.disabled())
+    return;
+  mbproto::ConsumeResponse response;
+  response.set_key(key);
+  response.set_payload(data);
+#ifdef USE_CONCURRENT_QUEUE
   tmpstr_.clear();
-  response_.SerializeToString(&tmpstr_);
-  Chain::Buffer outbuf;
-  outbuf.buf = (uint8_t*)tmpstr_.data(); outbuf.size = tmpstr_.size();
-  cons_.writeData(cons_.stream(), outbuf, false);
+  response.SerializeToString(&tmpstr_);
+  cq_.enqueue(std::move(tmpstr_));
+#else
+  {
+    std::unique_lock lock(mtx_);
+    tmpstr_.clear();
+    response.SerializeToString(&tmpstr_);
+    queue_.emplace_back(std::move(tmpstr_));
+  }
+#endif
+  async_.setAsync();
 }
 
