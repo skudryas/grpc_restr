@@ -6,14 +6,14 @@ static uint32_t variant5_decode(uint8_t *p);
 void GrpcServ::GrpcAccept::onAccept(TcpAccept *acc, int fd,
         struct sockaddr *localAddr, struct sockaddr *remoteAddr)
 {
-  auto conn = std::make_unique<Http2Conn>(acc->loop(), &serv_, fd, remoteAddr, localAddr);
-  serv_.gotConn(std::move(conn));
+  auto conn = std::make_unique<Http2Conn>(acc->loop(), serv_, fd, remoteAddr, localAddr);
+  serv_->gotConn(std::move(conn));
 }
 
 void GrpcServ::GrpcAccept::onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code) {
   DLOG(ERROR) << "Grpc server error: " << error << " code: "
             << strerror(code);
-  serv_.gotError(acc, error, code);
+  serv_->gotError(acc, error, code);
 }
 
 void GrpcServ::onError(Http2Conn *conn, const Http2ConnError& error)

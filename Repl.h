@@ -50,6 +50,7 @@ using counter_t = size_t;
 //#define REPL_VDEBUG
 //#define REPL_NO_UNINDEX
 #define SERV_THREAD_NUM 4 // 0
+#define USE_MULTI_ACCEPT
 //#define USE_CONCURRENT_QUEUE 1
 
 class Counter

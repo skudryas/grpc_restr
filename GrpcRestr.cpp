@@ -119,7 +119,11 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
 /*      INIT_ELAPSED;
       DLOG(ALERT) << std::fixed << __start << " got PRODUCE:" << request_.key();*/
     }
+#ifdef USE_MULTI_ACCEPT
+    repl_.consume(request_.key(), request_.payload());
+#else
     repl_.consumeAsync(request_.key(), request_.payload());
+#endif
   }
 }
 
@@ -171,11 +175,19 @@ void GrpcRestrStreamCons::onRead(Http2Stream *stream, Chain::Buffer& buf)
         for (auto &i : request_.keys()) {
           DLOG(DEBUG) << i;
         }
+#ifdef USE_MULTI_ACCEPT
+        repl_.subscribeBatch(&cons_, request_.keys());
+#else
         repl_.subscribeBatchAsync(&cons_, std::move(request_));
+#endif
         break;
       case mbproto::ConsumeRequest::UNSUBSCRIBE:
         DLOG(INFO) << "got UNSUBSCRIBE";
+#ifdef USE_MULTI_ACCEPT
+        repl_.unsubscribeBatch(&cons_, request_.keys());
+#else
         repl_.unsubscribeBatchAsync(&cons_, std::move(request_));
+#endif
         break;
       default:
         /* NO-OP */
@@ -202,7 +214,26 @@ void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const
     INIT_ELAPSED;
     DLOG(ALERT) << std::fixed <<  __start << " consume pushed to async, key = " << key;
   }*/
+#ifdef USE_SYNC_REPL
+  mbproto::ConsumeResponse response;
+  response.set_key(key);
+  response.set_payload(data);
+  std::string tmpstr;
+  response.SerializeToString(&tmpstr);
+  cons_.repl().incrementAsyncForwarded();
+  Chain::Buffer outbuf;
+  outbuf.buf = (uint8_t*)tmpstr.data(); outbuf.size = tmpstr.size();
+  {
+    std::unique_lock lock(mtx_);
+    TcpConn::State state = cons_.stream()->conn().conn()->state();
+    if (state == TcpConn::State::CONNECTED)
+      cons_.writeData(cons_.stream(), outbuf, false);
+    else
+      std::cout << "write data in state " << (int)state << std::endl;
+  }
+#else
   async_.pushData(key, data);
+#endif
 }
 
 void GrpcRestrStreamCons::AsyncConsumer::onError(Async *async, Error error, int code)

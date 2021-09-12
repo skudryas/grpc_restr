@@ -63,6 +63,9 @@ class GrpcRestrStreamCons: public GrpcStream
     {
       GrpcRestrStreamCons &cons_;
       AsyncConsumer &async_;
+#ifdef USE_SYNC_REPL
+      std::mutex mtx_;
+#endif
       ConsumerWrapper(GrpcRestrStreamCons &cons, AsyncConsumer &async): cons_(cons), async_(async),
             Repl::Consumer(SERV_THREAD_NUM + 1) {}
       virtual ~ConsumerWrapper()
@@ -80,7 +83,11 @@ class GrpcRestrStreamCons: public GrpcStream
     GrpcRestrStreamCons(Http2Stream *stream, Repl::GrpcRepl<mbproto::ConsumeRequest> &repl, GrpcRestrProvider *prov):
       stream_(stream), repl_(repl), async_(*this, stream->conn().loop()), cons_(*this, async_), prov_(prov)
     {
+#ifdef USE_MULTI_ACCEPT
+      repl_.addConsumer(&cons_);
+#else
       repl_.addConsumerAsync(&cons_);
+#endif
     }
     ~GrpcRestrStreamCons() override
     {

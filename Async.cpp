@@ -61,7 +61,7 @@ void Async::setAsync() {
 uint64_t Async::stopAsync() {
   if (disabled_)
     return -1;
-  uint64_t stored;
+  uint64_t stored = 0;
   int ret = read(fd_, &stored, 8);
   if (ret != 8 && errno != EAGAIN) {
     ERROR(FD);

@@ -39,16 +39,20 @@ class GrpcServ: public Http2ConnDlgt {
   public:
     class GrpcAccept: public TcpAcceptDlgt {
       public:
-        GrpcAccept(GrpcServ& serv) : serv_(serv) {}
+        GrpcAccept(): serv_(nullptr) {}
+        virtual void setServ(GrpcServ *serv, Loop *loop) { serv_ = serv; }
         virtual void onAccept(TcpAccept *acc, int fd,
             struct sockaddr *localAddr, struct sockaddr *remoteAddr) override;
         virtual void onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code) override;
       protected:
-        GrpcServ& serv_;
+        GrpcServ *serv_;
     };
     GrpcServ(GrpcStreamProvider *provider):
-      accept_(std::make_unique<GrpcAccept>(*this)),
-      provider_(provider) {}
+      accept_(std::make_shared<GrpcAccept>()), // It's a default acceptor which you can override
+      provider_(provider)
+    {
+      accept_->setServ(this, nullptr);
+    }
     // Http2ConnDlgt
     virtual void onError(Http2Conn *conn, const Http2ConnError& error) override;
     virtual void onStream(Http2Conn *conn, Http2Stream *stream) override;
@@ -57,18 +61,18 @@ class GrpcServ: public Http2ConnDlgt {
     virtual ~GrpcServ() override;
     // GrpcAccept
     TcpAcceptDlgt *acceptDlgt() {
-      // XXX remove
+      // XXX Use shared_ptr
       return accept_.get();
-    } 
-    void setAcceptDlgt(std::unique_ptr<GrpcAccept>&& accept) {
-      accept_ = std::move(accept);
+    }
+    void setAcceptDlgt(std::shared_ptr<GrpcAccept>& accept) {
+      accept_ = accept;
     }
     // GrpcAccept API
     void gotConn(std::unique_ptr<Http2Conn>&& conn);
     void gotError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code);
 
   private:
-    std::unique_ptr<GrpcAccept> accept_;
+    std::shared_ptr<GrpcAccept> accept_;
     GrpcStreamProvider *provider_; // weak
     std::unordered_map<Http2Conn*, std::unique_ptr<Http2Conn>> conns_;
 };
