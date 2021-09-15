@@ -15,7 +15,7 @@ class GrpcStream: public Http2StreamDlgt {
     bool checkHeaders(Http2Stream *stream);
     bool writeHeaders(Http2Stream *stream, int code, bool doclose);
     bool writeTrailers(Http2Stream *stream);
-    void writeData(Http2Stream *stream, Chain::Buffer &buf, bool doclose);
+    void writeData(Http2Stream *stream, const Chain::Buffer &buf, bool doclose);
     Chain::Buffer readData(Http2Stream *stream, Chain::Buffer &buf);
     const std::string& serviceName() const { return service_name_; }
     const std::string& messageType() const { return message_type_; }

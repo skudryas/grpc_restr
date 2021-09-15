@@ -50,7 +50,7 @@ class GrpcRestrStreamCons: public GrpcStream
       AsyncConsumer(GrpcRestrStreamCons &cons, Loop *loop): cons_(cons), async_(loop, this) {}
       virtual void onError(Async *async, Error error, int code) override;
       virtual void onAsync(Async *async) override;
-      void pushData(const std::string &key, const std::string &data);
+      void pushData(std::string&& data);
       void disableAsync() { async_.disableAsync(); }
 #ifdef USE_CONCURRENT_QUEUE
       moodycamel::ConcurrentQueue<std::string> cq_;
@@ -63,15 +63,12 @@ class GrpcRestrStreamCons: public GrpcStream
     {
       GrpcRestrStreamCons &cons_;
       AsyncConsumer &async_;
-#ifdef USE_SYNC_REPL
-      std::mutex mtx_;
-#endif
       ConsumerWrapper(GrpcRestrStreamCons &cons, AsyncConsumer &async): cons_(cons), async_(async),
             Repl::Consumer(SERV_THREAD_NUM + 1) {}
       virtual ~ConsumerWrapper()
       {
       }
-      virtual void consume(const std::string &key, const std::string &data) override;
+      virtual void consume(const std::string &key, const Chain::Buffer &data) override;
     };
     AsyncConsumer async_;
     ConsumerWrapper cons_;
@@ -117,9 +114,6 @@ class GrpcRestrProvider: public GrpcStreamProvider
     Grpc404Stream stream404_;
     std::set<GrpcRestrStreamProd*> producers_;
     std::set<GrpcRestrStreamCons*> consumers_;
-#ifdef GRPC_RESTR_PROFILE
-    bool profiling_ = {false};
-#endif
   public:
     GrpcRestrProvider(Repl::GrpcRepl<mbproto::ConsumeRequest> &repl): repl_(repl) {}
     void removeConsumer(GrpcRestrStreamCons *cons);

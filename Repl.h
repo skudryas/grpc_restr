@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <assert.h>
 #include <mutex>
+#include <atomic>
 #include <shared_mutex>
 #include "Match.h"
 //#include "Cache.h"
@@ -13,6 +14,10 @@
 #include <algorithm>
 #include <memory>
 
+#include "Chain.hpp"
+
+#include "robin-map/include/tsl/robin_map.h"
+#include "robin-map/include/tsl/robin_set.h"
 //#define REPL_PROFILE
 
 #ifdef REPL_PROFILE
@@ -49,8 +54,21 @@ using counter_t = size_t;
 //#define REPL_DEBUG
 //#define REPL_VDEBUG
 //#define REPL_NO_UNINDEX
+#define HASH_TABLE_TYPE_ROBIN
+//#define HASH_TABLE_TYPE_STL
+#if defined(HASH_TABLE_TYPE_STL)
+  #define UMAP std::unordered_map
+  #define USET std::unordered_set
+#elif defined(HASH_TABLE_TYPE_ROBIN)
+  #define UMAP tsl::robin_map
+  #define USET tsl::robin_set
+#else
+  #error "HASH_TABLE_TYPE is unknown type"##HASH_TABLE_TYPE
+#endif
+
 #define SERV_THREAD_NUM 4 // 0
 #define USE_MULTI_ACCEPT
+#define USE_REPL_LOCK
 //#define USE_CONCURRENT_QUEUE 1
 
 class Counter
@@ -102,7 +120,7 @@ struct Consumer /*: public std::enable_shared_from_this<Consumer> */
   }
   std::vector<Pattern*> patterns;
   Counter cnt;
-  virtual void consume(const std::string &key, const std::string &data)
+  virtual void consume(const std::string &key, const Chain::Buffer &data)
   {
 #ifdef REPL_DEBUG
     assert(0);
@@ -114,13 +132,15 @@ struct Consumer /*: public std::enable_shared_from_this<Consumer> */
 class Repl
 {
   private:
-    size_t consumed_;
-    size_t forwarded_;
+#ifdef REPL_PROFILE
+    std::atomic<size_t> consumed_;
+    std::atomic<size_t> forwarded_;
+#endif
     std::shared_mutex rwmtx_;
-    std::unordered_map<std::string, Pattern*> patterns_;
-    std::unordered_set<Consumer*> consumers_;
-    std::unordered_map<std::string_view, std::vector<Pattern*>> index_;
-    std::unordered_set<Pattern*> anyindex_;
+    UMAP<std::string, Pattern*> patterns_;
+    USET<Consumer*> consumers_;
+    UMAP<std::string_view, std::vector<Pattern*>> index_;
+    USET<Pattern*> anyindex_;
     Counter cnt_;
     size_t numthreads_;
     void checkCnt() {
@@ -158,7 +178,11 @@ class Repl
 #ifdef REPL_DEBUG
         assert(std::find(tok->second.begin(), tok->second.end(), pat) == tok->second.end());
 #endif
+#ifdef HASH_TABLE_TYPE_ROBIN
+        tok.value().emplace_back(pat);
+#else
         tok->second.emplace_back(pat);
+#endif
         // 5. Добавлять индекс в шаблон не надо. Нафиг он там не нужен.
       }
       // 6. Надо проиндексироват шаблоны только из * и #
@@ -183,13 +207,21 @@ class Repl
         assert(tok != index_.end());
 #endif
         // 3. Удаляем из индекса ссылку на шаблон. Ее не может не быть!
+#ifdef HASH_TABLE_TYPE_ROBIN
+        auto pit = std::find(tok.value().begin(), tok.value().end(), pat);
+#else
         auto pit = std::find(tok->second.begin(), tok->second.end(), pat);
+#endif
 #ifdef REPL_DEBUG
         assert(pit != tok->second.end());
 #endif
+#ifdef HASH_TABLE_TYPE_ROBIN
+        std::swap(*pit, *(tok.value().end() - 1));
+        tok.value().erase(tok.value().end() - 1);
+#else
         std::swap(*pit, *(tok->second.end() - 1));
         tok->second.erase(tok->second.end() - 1);
-
+#endif
         // 4. Подчищаем индекс
         if (tok->second.empty()) {
           index_.erase(tok);
@@ -224,7 +256,11 @@ class Repl
         }
         // 3. Нам нужен токен, у которого меньше всего паттернов, мы хотим матчить поменьше
         if (best_size == 0 || best_size > tok->second.size()) {
+#ifdef HASH_TABLE_TYPE_ROBIN
+          best = &tok.value();
+#else
           best = &tok->second;
+#endif
           best_size = best->size();
           // 4. Идеально!
           if (best_size == 1)
@@ -234,13 +270,31 @@ class Repl
       return best;
     }
   public:
+#ifdef REPL_PROFILE
     size_t consumed() const { return consumed_; }
     size_t forwarded() const { return forwarded_; }
+#endif
+    virtual void startProfiling()
+    {
+#ifdef REPL_PROFILE
+      ProfilerStart("/tmp/grpc_restr.prof");
+#endif
+    }
+    virtual void stopProfiling()
+    {
+#ifdef REPL_PROFILE
+      ProfilerStop();
+#endif
+    }
+
     void printStat() const {
 //    std::cout << "T: " << g_repl_tid1 << " patterns=" << patterns_.size() << " consumers=" << consumers_.size() << std::endl;
     }
     Repl(size_t num = 1):
-      consumed_(0), forwarded_(0), cnt_(num), numthreads_(num) {
+#ifdef REPL_PROFILE
+      consumed_(0), forwarded_(0),
+#endif
+      cnt_(num), numthreads_(num) {
       consumers_.max_load_factor(1);
       consumers_.reserve(512);
       patterns_.max_load_factor(1);
@@ -252,7 +306,7 @@ class Repl
     }
     void addConsumer(Consumer *cons)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
 #ifdef REPL_DEBUG
@@ -265,7 +319,7 @@ class Repl
 #endif
 #ifdef REPL_PROFILE
       if (consumers_.size() == 0) {
-        ProfilerStart("/gperf/serv.prof");
+        startProfiling();
       }
 #endif
       consumers_.insert(cons);
@@ -273,7 +327,7 @@ class Repl
     void removeConsumer(Consumer *cons)
     {
       //std::cout << "consumer removed" << std::endl;
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
 #ifdef REPL_VDEBUG
@@ -285,7 +339,8 @@ class Repl
 #endif 
 #ifdef REPL_PROFILE
       if (consumers_.size() == 500 || consumers_.size() == 100) {
-        ProfilerStop();
+        std::cout << "Reached consumer disconnect while consumer count is " << consumers_.size() << std::endl;
+        stopProfiling();
       }
 #endif
       // XXX START
@@ -319,32 +374,36 @@ class Repl
 
     }
 
-    void tryConsume(const std::string &key, const std::string& data, Pattern *pat)
+    void tryConsume(const std::string &key, const /*std::string*/Chain::Buffer &data, Pattern *pat)
     {
       if (Match::Result::Yes == Match::Match(key.c_str(), pat->val.c_str())) {
         for (auto &cons: pat->consumers) {
-          if (cons->cnt == cnt_) {
+          /*if (cons->cnt == cnt_) {
             std::cout << "consume5" << std::endl;
             continue;
           }
-          cons->cnt = cnt_;
+          cons->cnt = cnt_;*/
           cons->consume(key, data);
+#ifdef REPL_PROFILE
           forwarded_++;
+#endif
         }
       }
     }
 
-    void consume(const std::string &key, const std::string &data)
+    void consume(const std::string &key, const Chain::Buffer &data)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::shared_lock lock(rwmtx_);
 #endif
+#ifdef REPL_PROFILE
       ++consumed_;
+#endif
 #ifdef REPL_VDEBUG
       INIT_ELAPSED;
 #endif
       // 1. Если каким-то чудом произошло переполнение каунтера - обнуляем его
-      checkCnt();
+      //checkCnt();
 
       auto *patterns = reindexToken(key);
       if (patterns) {
@@ -371,7 +430,7 @@ class Repl
     template <typename Iterable>
     void subscribeBatch(Consumer *cons, const Iterable &pats)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
       // 1. Ищем паттерн
@@ -382,7 +441,7 @@ class Repl
 
     void subscribe(Consumer *cons, const std::string &pat)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
       subscribeUnlocked(cons, pat);
@@ -391,7 +450,7 @@ class Repl
     template <typename Iterable>
     void unsubscribeBatch(Consumer *cons, const Iterable &pats)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
       for (auto &pat: pats) {
@@ -402,7 +461,7 @@ class Repl
 
     void unsubscribe(Consumer *cons, const std::string &pat)
     {
-#if SERV_THREAD_NUM > 1
+#if SERV_THREAD_NUM > 1 && defined(USE_REPL_LOCK)
       std::unique_lock lock(rwmtx_);
 #endif
       unsubscribeUnlocked(cons, pat);

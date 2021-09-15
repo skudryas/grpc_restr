@@ -16,8 +16,8 @@ Http2Conn::Http2Conn(Loop *loop, Http2ConnDlgt *dlgt, int fd, struct sockaddr *r
                conn_(std::unique_ptr<TcpConn>(new TcpConn(loop, this, fd, remote, local, flags))),
                dlgt_(dlgt), state_(State::CONNECTING), pingSent_(false), loop_(loop)
 {
-  conn_->readSome();
   init();
+  conn_->readSome();
 }
 
 Http2Conn::~Http2Conn() {

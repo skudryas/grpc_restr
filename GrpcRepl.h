@@ -23,7 +23,9 @@ class GrpcRepl: public Repl
         switch (e.type) {
           case Elem::CONS:
             assert(e.key.length() > 0);
-            consume(e.key, e.data);
+            Chain::Buffer buf;
+            buf.buf = (uint8_t*)e.data.data(); buf.size = e.data.size();
+            consume(e.key, buf);
             break;
           case Elem::SUB:
             subscribeBatch(e.cons, e.sub.keys());
@@ -60,14 +62,14 @@ class GrpcRepl: public Repl
       e.cons = cons;
       bbq_.push_back(std::move(e));
     }
-    void consumeAsync(const std::string &key, const std::string &data)
+    void consumeAsync(const std::string &key, const Chain::Buffer &data)
     {
-      //std::cout << "consAsync " << key << std::endl;
+      DLOG(DEBUG) << "consAsync " << key;
       ++asyncConsumed_;
       Elem e;
 //      Elem e(totalCounterAsync_++);
       e.type = Elem::CONS;
-      e.key = std::move(key); e.data = std::move(data);
+      e.key = std::move(key); e.data = std::string((char*)data.buf, data.size);
       bbq_.push_back(std::move(e));
     }
     void addConsumerAsync(Consumer *cons)
@@ -86,9 +88,32 @@ class GrpcRepl: public Repl
       e.cons = cons;
       bbq_.push_back(std::move(e));
     }
+#ifdef REPL_PROFILE
     size_t asyncConsumed() const { return asyncConsumed_; }
     size_t asyncForwarded() const { return asyncForwarded_; }
-    void incrementAsyncForwarded() { ++asyncForwarded_; }
+#endif
+    void incrementAsyncForwarded()
+    {
+#ifdef REPL_PROFILE
+      ++asyncForwarded_;
+#endif
+    }
+    virtual void startProfiling() override
+    {
+#ifdef REPL_PROFILE
+      Repl::startProfiling();
+#endif
+    }
+    virtual void stopProfiling() override
+    {
+#ifdef REPL_PROFILE
+      Repl::stopProfiling();
+      LOG(ALERT) << "AsyncConsumed in: " << asyncConsumed();
+      LOG(ALERT) << "Consumed in: " << consumed();
+      LOG(ALERT) << "Forwarded out " << forwarded();
+      LOG(ALERT) << "AsyncForwarded out " << asyncForwarded();
+#endif
+    }
   private:
     struct Elem
     {
@@ -108,8 +133,8 @@ class GrpcRepl: public Repl
 //      size_t idx;
     };
     BoundedBlockingQueue<Elem> bbq_;
-    size_t asyncConsumed_;
-    size_t asyncForwarded_;
+    std::atomic<size_t> asyncConsumed_;
+    std::atomic<size_t> asyncForwarded_;
 /*    size_t totalCounter_;
     size_t totalCounterAsync_;*/
 };

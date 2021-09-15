@@ -49,5 +49,7 @@ class Loop
     bool removeTask(Conn*);
 
     int epollfd() { return epollfd_; }
+
+static volatile Loop* getCurrentLoop();
 };
 

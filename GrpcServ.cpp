@@ -114,7 +114,7 @@ static uint32_t variant5_decode(uint8_t *p) // unsafe!
   return ret;
 }
 
-void GrpcStream::writeData(Http2Stream *stream, Chain::Buffer &buf, bool doclose) // write length-prepended data, length in variant encoding
+void GrpcStream::writeData(Http2Stream *stream, const Chain::Buffer &buf, bool doclose) // write length-prepended data, length in variant encoding
 {
   uint8_t *p = (uint8_t*)alloca(LENGTH_PREFIX_LENGTH + buf.size);
   memcpy(&p[LENGTH_PREFIX_LENGTH], buf.buf, buf.size);

@@ -12,7 +12,7 @@ int main(int argc, char **argv)
 
   Repl::GrpcRepl<mbproto::ConsumeRequest> repl(SERV_THREAD_NUM);
 #ifdef USE_MULTI_ACCEPT
-  std::shared_ptr<GrpcServ::GrpcAccept> acceptor = std::make_shared<GrpcMultiAccept>();
+  std::shared_ptr<GrpcServ::GrpcAccept> acceptor = std::make_shared<GrpcMultiAccept>(SERV_THREAD_NUM);
 
   auto grpc_thread = [&repl, &acceptor] (size_t repl_tid) {
     auto prov = std::make_unique<GrpcRestrProvider>(repl);

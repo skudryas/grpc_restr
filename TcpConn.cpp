@@ -123,7 +123,7 @@ void TcpConn::tryConnect() {
 
 void TcpConn::writeSome() {
   assert(state_ == State::CONNECTED);
-  if (directWrite()) {
+  if (/*directWrite()*/ true) {
     Task newset = (Task)(taskset_ | Task::OUT);
     if (taskset_ != newset) {
       DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
@@ -196,6 +196,11 @@ void TcpConn::closeNow() {
     if (dlgt_) dlgt_->onClosed(this);
   }
 }
+
+/*
+ * false - ERROR, NO_DATA
+ * true  - EAGAIN,
+ * */
 
 bool TcpConn::directWrite() {
   int ret = 0;

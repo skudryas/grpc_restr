@@ -18,12 +18,6 @@ GrpcStream* GrpcRestrProvider::newStream(Http2Stream* stream)
     prod->onCreated(stream);
     return prod;
   } else if (path->second == "/mbproto.MessageBroker/Consume") {
-#ifdef GRPC_RESTR_PROFILE
-    if (!profiling_ && consumers_.empty()) {
-      ProfilerStart("/tmp/grpc_restr.prof");
-      profiling_ = true;
-    }
-#endif
     GrpcRestrStreamCons *cons = new GrpcRestrStreamCons(stream, repl_, this);
     auto ret = consumers_.emplace(cons);
     assert(ret.second);
@@ -44,16 +38,6 @@ void GrpcRestrProvider::removeConsumer(GrpcRestrStreamCons *cons)
 {
   consumers_.erase(cons);
   delete cons;
-#ifdef GRPC_RESTR_PROFILE
-  if (profiling_ && consumers_.empty()) {
-    ProfilerStop();
-    profiling_ = false;
-    LOG(ALERT) << "AsyncConsumed in: " << repl_.asyncConsumed();
-    LOG(ALERT) << "Consumed in: " << repl_.consumed();
-    LOG(ALERT) << "Forwarded out " << repl_.forwarded();
-    LOG(ALERT) << "AsyncForwarded out " << repl_.asyncForwarded();
-  }
-#endif
 }
 
 void GrpcRestrProvider::removeProducer(GrpcRestrStreamProd *prod)
@@ -89,6 +73,7 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
         " lpm size=" << lpm_.size() << " lpm= " << lpm_size_;
       break;
     }
+    std::string tmpstr((char*)pb.buf, pb.size);
 #if 1
     Chain::StreamBuf sb(lpm_);
     std::istream is(&sb);
@@ -120,9 +105,9 @@ void GrpcRestrStreamProd::onRead(Http2Stream *stream, Chain::Buffer& buf)
       DLOG(ALERT) << std::fixed << __start << " got PRODUCE:" << request_.key();*/
     }
 #ifdef USE_MULTI_ACCEPT
-    repl_.consume(request_.key(), request_.payload());
+    repl_.consume(request_.key(), {(uint8_t*)tmpstr.data(), tmpstr.size()});
 #else
-    repl_.consumeAsync(request_.key(), request_.payload());
+    repl_.consumeAsync(request_.key(), {(uint8_t*)tmpstr.data(), tmpstr.size()});
 #endif
   }
 }
@@ -208,31 +193,24 @@ void GrpcRestrStreamCons::onClosed(Http2Stream *stream)
   prov_->removeConsumer(this);
 }
 
-void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const std::string &data)
+void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const Chain::Buffer &data)
 {
 /*  {
     INIT_ELAPSED;
     DLOG(ALERT) << std::fixed <<  __start << " consume pushed to async, key = " << key;
   }*/
-#ifdef USE_SYNC_REPL
-  mbproto::ConsumeResponse response;
-  response.set_key(key);
-  response.set_payload(data);
-  std::string tmpstr;
-  response.SerializeToString(&tmpstr);
-  cons_.repl().incrementAsyncForwarded();
-  Chain::Buffer outbuf;
-  outbuf.buf = (uint8_t*)tmpstr.data(); outbuf.size = tmpstr.size();
-  {
-    std::unique_lock lock(mtx_);
-    TcpConn::State state = cons_.stream()->conn().conn()->state();
-    if (state == TcpConn::State::CONNECTED)
-      cons_.writeData(cons_.stream(), outbuf, false);
-    else
-      std::cout << "write data in state " << (int)state << std::endl;
+  // XXX non-async forward for same loop
+  if (async_.async_.loop() == Loop::getCurrentLoop() /* false */) {
+    cons_.repl().incrementAsyncForwarded();
+    cons_.writeData(cons_.stream(), data, false);
+  } else {
+    async_.pushData(/*key,*/ std::string((char*)data.buf, data.size));
   }
-#else
-  async_.pushData(key, data);
+#ifdef REPL_PROFILE
+  if (cons_.repl().forwarded() == 3027431) {
+    LOG(ALERT) << "Reached 3027431 messages!";
+    cons_.repl().stopProfiling();
+  }
 #endif
 }
 
@@ -276,25 +254,14 @@ void GrpcRestrStreamCons::AsyncConsumer::onAsync(Async *async)
 }
 
 
-void GrpcRestrStreamCons::AsyncConsumer::pushData(const std::string &key, const std::string &data)
+void GrpcRestrStreamCons::AsyncConsumer::pushData(std::string &&data)
 {
   if (async_.disabled())
     return;
-  mbproto::ConsumeResponse response;
-  response.set_key(key);
-  response.set_payload(data);
-#ifdef USE_CONCURRENT_QUEUE
-  tmpstr_.clear();
-  response.SerializeToString(&tmpstr_);
-  cq_.enqueue(std::move(tmpstr_));
-#else
   {
     std::unique_lock lock(mtx_);
-    tmpstr_.clear();
-    response.SerializeToString(&tmpstr_);
-    queue_.emplace_back(std::move(tmpstr_));
+    queue_.emplace_back(std::move(data));
   }
-#endif
   async_.setAsync();
 }
 

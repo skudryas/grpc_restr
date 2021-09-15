@@ -1,7 +1,8 @@
 #include "GrpcMultiAccept.hpp"
 
-GrpcMultiAccept::GrpcMultiAccept(): idx_(0)
+GrpcMultiAccept::GrpcMultiAccept(int thread_count): idx_(0)
 {
+  servs_.reserve(thread_count);
 }
 
 void GrpcMultiAccept::onAccept(TcpAccept *acc, int fd,
@@ -18,7 +19,8 @@ void GrpcMultiAccept::onAccept(TcpAccept *acc, int fd,
   serv.serv->gotConn(std::move(conn));
 }
 
-void GrpcMultiAccept::onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code) {
+void GrpcMultiAccept::onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code)
+{
   DLOG(ERROR) << "Grpc server error: " << error << " code: "
             << strerror(code);
   for (auto& serv: servs_) // XXX

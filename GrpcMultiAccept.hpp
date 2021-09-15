@@ -4,7 +4,7 @@
 
 class GrpcMultiAccept: public GrpcServ::GrpcAccept {
   public:
-    GrpcMultiAccept();
+    GrpcMultiAccept(int thread_count);
     virtual void onAccept(TcpAccept *acc, int fd,
         struct sockaddr *localAddr, struct sockaddr *remoteAddr) override;
     virtual void onError(TcpAccept *acc, TcpAcceptDlgt::Error error, int code) override;

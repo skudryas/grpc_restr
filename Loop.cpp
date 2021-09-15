@@ -5,6 +5,12 @@
 #include <assert.h>
 #include <iostream>
 
+volatile thread_local Loop *g_current_loop = nullptr;
+
+volatile Loop *Loop::getCurrentLoop() {
+  return g_current_loop;
+}
+
 Loop::Loop(int evcount): run_(false) {
    epollfd_ = epoll_create1(0); 
    events_ = new struct epoll_event[evcount];
@@ -13,6 +19,7 @@ Loop::Loop(int evcount): run_(false) {
 
 void Loop::run() {
   run_ = true;
+  g_current_loop = this;
   while (run_) {
     int nfds = epoll_wait(epollfd_, events_, evcount_, -1);
     if (nfds < 0 && errno != EINTR) {
@@ -26,6 +33,7 @@ void Loop::run() {
       c->onEvent((Task)events_[n].events);
     }
   }
+  g_current_loop = nullptr;
 }
 
 bool Loop::addTask(Task events, Conn *ptr)
