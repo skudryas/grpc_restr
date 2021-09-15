@@ -1,5 +1,8 @@
 #include "TcpConn.hpp"
 #include <iostream>
+#include <sys/uio.h>
+
+#define USE_WRITEV
 
 #undef ERROR
 #define ERROR(code) if (dlgt_) dlgt_->onError(this, TcpConnDlgt::Error::code, errno); \
@@ -123,7 +126,7 @@ void TcpConn::tryConnect() {
 
 void TcpConn::writeSome() {
   assert(state_ == State::CONNECTED);
-  if (/*directWrite()*/ true) {
+  if (/*directWriteV()*/  true) {
     Task newset = (Task)(taskset_ | Task::OUT);
     if (taskset_ != newset) {
       DLOG(DEBUG) << "taskset = " << taskset_ << " newset = " << newset << " fd = " << fd() << " ptr = " << this;
@@ -201,6 +204,63 @@ void TcpConn::closeNow() {
  * false - ERROR, NO_DATA
  * true  - EAGAIN,
  * */
+bool TcpConn::directWriteV() {
+  if (output_.size() == 0)
+    return false;
+  const std::list<Chain::Dh> &chain = output_.chain();
+  size_t veclen = chain.size();
+  struct iovec *iovs = (struct iovec*)alloca(sizeof(struct iovec) * veclen);
+  if (!iovs)
+    return false;
+  std::list<Chain::Dh>::const_iterator it = chain.begin();
+  for (int i = 0; i < veclen; ++i) {
+    iovs[i].iov_base = (void*)it->data();
+    iovs[i].iov_len = it->size();
+    ++it;
+  }
+
+  int ret = writev(fd_, iovs, veclen);
+
+  if (ret < 0) {
+    if (errno != EAGAIN && errno != EWOULDBLOCK) {
+      if (state_ == State::FLUSHING) {
+        closeNow();
+        return false;
+      }
+      ERROR(WRITE);
+      return false;
+    } else {
+      return true;
+    }
+  } else {
+    if (ret > 0) {
+        if (dlgt_) dlgt_->onWrite(this, Chain::Buffer{nullptr, (size_t)ret});
+        output_.drain(ret);
+    }
+    if (output_.size() == 0) {
+      Task newset = (Task)(taskset_ & (~Task::OUT));
+      if (taskset_ != newset) {
+        taskset_ = newset;
+        DLOG(DEBUG) << "directWriteV taskset = " << taskset_<< " fd = " << fd() << " ptr = " << this;
+        if (!loop_->modifyTask(taskset_, this)) {
+          ERROR(WRITE);
+          return false;
+        }
+      }
+      if (state_ == State::FLUSHING) {
+        if (0 != shutdown(fd_, SHUT_WR)) {
+          ERROR(CLOSE);
+          return false;
+        }
+        closeNow();
+        return false;
+      }
+      return false;
+    }
+  }
+  return false; /* NEVER REACHED */
+}
+
 
 bool TcpConn::directWrite() {
   int ret = 0;
@@ -318,7 +378,11 @@ void TcpConn::onEvent(Task evt) {
     }
     // Connected
     if (state_ == State::CONNECTED || state_ == State::FLUSHING) {
+#ifdef USE_WRITEV
+      (void)directWriteV();
+#else
       (void)directWrite();
+#endif
     }
   }
 }

@@ -78,6 +78,7 @@ class TcpConn : public Conn {
     }
   private:
     bool directWrite(); // true if need polling
+    bool directWriteV(); // true if need polling
 #ifdef THREADED_POLLING
     std::atomic_flag inEvent_ = ATOMIC_FLAG_INIT;
 #endif

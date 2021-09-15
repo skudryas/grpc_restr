@@ -14,7 +14,7 @@
 extern const int g_pagesize;
 
 class Chain {
-  private:
+  public:
     class Dh {
       private:
         std::vector<uint8_t> buf_;
@@ -51,6 +51,9 @@ class Chain {
         uint8_t* data() { // w
           return buf_.data() + begin_;
         }
+        const uint8_t* data() const { // w
+          return buf_.data() + begin_;
+        }
         uint8_t* tail() { // r
           return buf_.data() + end_;
         }
@@ -74,6 +77,7 @@ class Chain {
           }
         }
     };
+  private:
     std::list<Dh> chain_;
     size_t size_, blockSize_;
   public:
