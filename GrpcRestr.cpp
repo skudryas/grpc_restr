@@ -200,7 +200,7 @@ void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const
     DLOG(ALERT) << std::fixed <<  __start << " consume pushed to async, key = " << key;
   }*/
   // XXX non-async forward for same loop
-  if (async_.async_.loop() == Loop::getCurrentLoop() /* false*/ ) {
+  if (/*async_.async_.loop() == Loop::getCurrentLoop() */ false ) {
     cons_.repl().incrementAsyncForwarded();
     cons_.writeData(cons_.stream(), data, false);
   } else {
@@ -258,10 +258,14 @@ void GrpcRestrStreamCons::AsyncConsumer::pushData(std::string &&data)
 {
   if (async_.disabled())
     return;
+#ifdef USE_CONCURRENT_QUEUE
+  cq_.enqueue(std::move(data));
+#else
   {
     std::unique_lock lock(mtx_);
     queue_.emplace_back(std::move(data));
   }
+#endif
   async_.setAsync();
 }
 

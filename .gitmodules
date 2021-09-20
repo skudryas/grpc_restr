@@ -1,0 +1,6 @@
+[submodule "hopscotch-map"]
+	path = hopscotch-map
+	url = ./hopscotch-map
+[submodule "robin-map"]
+	path = robin-map
+	url = ./robin-map/

@@ -16,8 +16,30 @@
 
 #include "Chain.hpp"
 
-#include "robin-map/include/tsl/robin_map.h"
-#include "robin-map/include/tsl/robin_set.h"
+#include "Hash.hpp"
+
+#define HASH_TABLE_TYPE_HOPSCOTCH
+//#define HASH_TABLE_TYPE_ROBIN
+//#define HASH_TABLE_TYPE_STL
+#if defined(HASH_TABLE_TYPE_STL)
+  #define UMAP std::unordered_map
+  #define USET std::unordered_set
+#elif defined(HASH_TABLE_TYPE_ROBIN)
+  #define HASH_TABLE_TYPE_TSL
+  #define UMAP tsl::robin_map
+  #define USET tsl::robin_set
+  #include "robin-map/include/tsl/robin_map.h"
+  #include "robin-map/include/tsl/robin_set.h"
+#elif defined(HASH_TABLE_TYPE_HOPSCOTCH)
+  #define HASH_TABLE_TYPE_TSL
+  #define UMAP tsl::hopscotch_map
+  #define USET tsl::hopscotch_set
+  #include "hopscotch-map/include/tsl/hopscotch_map.h"
+  #include "hopscotch-map/include/tsl/hopscotch_set.h"
+#else
+  #error "HASH_TABLE_TYPE is unknown type"##HASH_TABLE_TYPE
+#endif
+
 //#define REPL_PROFILE
 
 #ifdef REPL_PROFILE
@@ -54,22 +76,10 @@ using counter_t = size_t;
 //#define REPL_DEBUG
 //#define REPL_VDEBUG
 //#define REPL_NO_UNINDEX
-#define HASH_TABLE_TYPE_ROBIN
-//#define HASH_TABLE_TYPE_STL
-#if defined(HASH_TABLE_TYPE_STL)
-  #define UMAP std::unordered_map
-  #define USET std::unordered_set
-#elif defined(HASH_TABLE_TYPE_ROBIN)
-  #define UMAP tsl::robin_map
-  #define USET tsl::robin_set
-#else
-  #error "HASH_TABLE_TYPE is unknown type"##HASH_TABLE_TYPE
-#endif
-
 #define SERV_THREAD_NUM 4 // 0
 #define USE_MULTI_ACCEPT
 #define USE_REPL_LOCK
-//#define USE_CONCURRENT_QUEUE 1
+#define USE_CONCURRENT_QUEUE 1
 
 class Counter
 {
@@ -137,9 +147,9 @@ class Repl
     std::atomic<size_t> forwarded_;
 #endif
     std::shared_mutex rwmtx_;
-    UMAP<std::string, Pattern*> patterns_;
+    UMAP<Hash, Pattern*> patterns_;
     USET<Consumer*> consumers_;
-    UMAP<std::string_view, std::vector<Pattern*>> index_;
+    UMAP<Hash, std::vector<Pattern*>> index_;
     USET<Pattern*> anyindex_;
     Counter cnt_;
     size_t numthreads_;
@@ -163,12 +173,13 @@ class Repl
       // 1. Бежим по списку токенов
       for (size_t i = 0; i < tokens_count; ++i) {
         // 2. Ищем токен в индексе
-        auto tok = index_.find(out[i]);
+        Hash h(out[i]);
+        auto tok = index_.find(h);
         if (tok == index_.end()) {
           // 3. Если его нет - добавляем
           //std::unordered_set<Pattern*> patterns_in_token;
           //patterns_in_token.max_load_factor(16);
-          auto empres = index_.emplace(std::move(out[i]), std::move(std::vector<Pattern*>()));
+          auto empres = index_.emplace(h, std::move(std::vector<Pattern*>()));
 #ifdef REPL_DEBUG
           assert(empres.second);
 #endif
@@ -178,7 +189,7 @@ class Repl
 #ifdef REPL_DEBUG
         assert(std::find(tok->second.begin(), tok->second.end(), pat) == tok->second.end());
 #endif
-#ifdef HASH_TABLE_TYPE_ROBIN
+#ifdef HASH_TABLE_TYPE_TSL
         tok.value().emplace_back(pat);
 #else
         tok->second.emplace_back(pat);
@@ -202,12 +213,13 @@ class Repl
       // 1. Бежим по списку токенов
       for (size_t i = 0; i < tokens_count; ++i) {
         // 2. Ищем токен в индексе. Его не может не быть!
-        auto tok = index_.find(out[i]);
+        Hash h(out[i]);
+        auto tok = index_.find(h);
 #ifdef REPL_DEBUG
         assert(tok != index_.end());
 #endif
         // 3. Удаляем из индекса ссылку на шаблон. Ее не может не быть!
-#ifdef HASH_TABLE_TYPE_ROBIN
+#ifdef HASH_TABLE_TYPE_TSL
         auto pit = std::find(tok.value().begin(), tok.value().end(), pat);
 #else
         auto pit = std::find(tok->second.begin(), tok->second.end(), pat);
@@ -215,7 +227,7 @@ class Repl
 #ifdef REPL_DEBUG
         assert(pit != tok->second.end());
 #endif
-#ifdef HASH_TABLE_TYPE_ROBIN
+#ifdef HASH_TABLE_TYPE_TSL
         std::swap(*pit, *(tok.value().end() - 1));
         tok.value().erase(tok.value().end() - 1);
 #else
@@ -247,7 +259,8 @@ class Repl
       size_t best_size = 0;
       for (size_t i = 0; i < tokens_count; ++i) {
         // 2. Ищем токен в индексе. Его может не быть!
-        auto tok = index_.find(out[i]);
+        Hash h(out[i]);
+        auto tok = index_.find(h);
         if (tok == index_.end()) {
           //std::cout << "not found while index size = " << index_.size() << std::endl;
           continue;
@@ -256,7 +269,7 @@ class Repl
         }
         // 3. Нам нужен токен, у которого меньше всего паттернов, мы хотим матчить поменьше
         if (best_size == 0 || best_size > tok->second.size()) {
-#ifdef HASH_TABLE_TYPE_ROBIN
+#ifdef HASH_TABLE_TYPE_TSL
           best = &tok.value();
 #else
           best = &tok->second;
@@ -338,7 +351,7 @@ class Repl
       }
 #endif 
 #ifdef REPL_PROFILE
-      if (consumers_.size() == 500 || consumers_.size() == 100) {
+      if (consumers_.size() == 500 /*|| consumers_.size() == 100*/) {
         std::cout << "Reached consumer disconnect while consumer count is " << consumers_.size() << std::endl;
         stopProfiling();
       }
@@ -472,10 +485,11 @@ class Repl
       if (!consumers_.count(cons))
         return;
       // 1. Ищем паттерн
-      auto it = patterns_.find(pat);
+      Hash h(pat);
+      auto it = patterns_.find(h);
       // 2. Если его нет - добавляем
       if (it == patterns_.end()) {
-        it = patterns_.emplace(pat, new Pattern(pat, numthreads_)).first;
+        it = patterns_.emplace(h, new Pattern(pat, numthreads_)).first;
         indexPattern(it->second);
       }
       // 3. Добавляем консумера в найденный / созданный паттерн
