@@ -312,12 +312,6 @@ bool TcpConn::directWrite() {
 
 void TcpConn::onEvent(Task evt) {
 
-#ifdef THREADED_POLLING
-  if (inEvent_.test_and_set())
-    return;
-  AtomicUnlock ulock(inEvent_);
-#endif
-
   assert(fd_ != -1);
   if (evt & Task::HUP || evt & Task::ERR) {
     if (state_ == State::CONNECTING) {

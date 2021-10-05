@@ -3,9 +3,10 @@
 
 #include "murmur3.h"
 
-// 1. hash*
-// 2. write flush
-// 3. fast async
+// 1. hash +
+// 2. write flush ?
+// 3. fast async ?
+// 4. use Conn wrappers!
 
 struct MurMurHasher32 {
   using result_type = uint32_t;

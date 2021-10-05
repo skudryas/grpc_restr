@@ -13,23 +13,6 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdlib.h>
-#include <atomic>
-
-class AtomicUnlock
-{
-  std::atomic_flag &a_;
-public:
-  AtomicUnlock(AtomicUnlock&&) = delete;
-  AtomicUnlock& operator=(AtomicUnlock &) = delete;
-  AtomicUnlock& operator=(AtomicUnlock &&) = delete;
-  AtomicUnlock(std::atomic_flag &a): a_(a)
-  {
-  }
-  ~AtomicUnlock()
-  {
-    a_.clear(/*std::memory_order_relaxed*/);
-  }
-};
 
 class TcpConnDlgt;
 
@@ -79,9 +62,6 @@ class TcpConn : public Conn {
   private:
     bool directWrite(); // true if need polling
     bool directWriteV(); // true if need polling
-#ifdef THREADED_POLLING
-    std::atomic_flag inEvent_ = ATOMIC_FLAG_INIT;
-#endif
     size_t readWinShift_ = 0;
     void tryConnect();
     struct addrinfo *rp_, *rpfirst_;

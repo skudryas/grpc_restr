@@ -79,7 +79,7 @@ using counter_t = size_t;
 #define SERV_THREAD_NUM 4 // 0
 #define USE_MULTI_ACCEPT
 #define USE_REPL_LOCK
-#define USE_CONCURRENT_QUEUE 1
+//#define USE_CONCURRENT_QUEUE 1
 
 class Counter
 {

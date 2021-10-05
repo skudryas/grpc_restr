@@ -77,7 +77,6 @@ void Event::onEvent(Task evt) {
   assert(!disabled_);
   assert(fd_ != -1);
   if (evt & Task::IN) {
-    stopEvent();
     if (dlgt_) dlgt_->onEvent(this);
   }
 }

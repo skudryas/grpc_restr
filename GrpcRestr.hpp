@@ -1,7 +1,7 @@
 #pragma once
 
 #include "GrpcDefault.hpp"
-#include "Async.hpp"
+#include "Event.hpp"
 #include "GrpcRepl.h"
 
 #ifdef USE_CONCURRENT_QUEUE
@@ -42,16 +42,16 @@ class GrpcRestrStreamProd: public GrpcStream
 class GrpcRestrStreamCons: public GrpcStream
 {
   private:
-    struct AsyncConsumer: public AsyncDlgt
+    struct EventConsumer: public EventDlgt
     {
       GrpcRestrStreamCons &cons_;
       std::string tmpstr_;
-      Async async_;
-      AsyncConsumer(GrpcRestrStreamCons &cons, Loop *loop): cons_(cons), async_(loop, this) {}
-      virtual void onError(Async *async, Error error, int code) override;
-      virtual void onAsync(Async *async) override;
+      Event event_;
+      EventConsumer(GrpcRestrStreamCons &cons, Loop *loop): cons_(cons), event_(loop, this) {}
+      virtual void onError(Event *event, Error error, int code) override;
+      virtual void onEvent(Event *event) override;
       void pushData(std::string&& data);
-      void disableAsync() { async_.disableAsync(); }
+      void disableEvent() { event_.disableEvent(); }
 #ifdef USE_CONCURRENT_QUEUE
       moodycamel::ConcurrentQueue<std::string> cq_;
 #else
@@ -62,15 +62,15 @@ class GrpcRestrStreamCons: public GrpcStream
     struct ConsumerWrapper: public Repl::Consumer
     {
       GrpcRestrStreamCons &cons_;
-      AsyncConsumer &async_;
-      ConsumerWrapper(GrpcRestrStreamCons &cons, AsyncConsumer &async): cons_(cons), async_(async),
+      EventConsumer &event_;
+      ConsumerWrapper(GrpcRestrStreamCons &cons, EventConsumer &event): cons_(cons), event_(event),
             Repl::Consumer(SERV_THREAD_NUM + 1) {}
       virtual ~ConsumerWrapper()
       {
       }
       virtual void consume(const std::string &key, const Chain::Buffer &data) override;
     };
-    AsyncConsumer async_;
+    EventConsumer event_;
     ConsumerWrapper cons_;
     Http2Stream *stream_;
     Repl::GrpcRepl<mbproto::ConsumeRequest> &repl_;
@@ -78,17 +78,17 @@ class GrpcRestrStreamCons: public GrpcStream
     GrpcRestrProvider *prov_;
   public:
     GrpcRestrStreamCons(Http2Stream *stream, Repl::GrpcRepl<mbproto::ConsumeRequest> &repl, GrpcRestrProvider *prov):
-      stream_(stream), repl_(repl), async_(*this, stream->conn().loop()), cons_(*this, async_), prov_(prov)
+      stream_(stream), repl_(repl), event_(*this, stream->conn().loop()), cons_(*this, event_), prov_(prov)
     {
 #ifdef USE_MULTI_ACCEPT
       repl_.addConsumer(&cons_);
 #else
-      repl_.addConsumerAsync(&cons_);
+      repl_.addConsumerEvent(&cons_);
 #endif
     }
     ~GrpcRestrStreamCons() override
     {
-      //async_.disableAsync();
+      //event_.disableEvent();
       repl_.removeConsumer(&cons_); // SHOULD BE NON-ASYNC!
       stream_->setDlgt(nullptr);
     }

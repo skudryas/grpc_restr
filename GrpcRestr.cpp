@@ -197,14 +197,14 @@ void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const
 {
 /*  {
     INIT_ELAPSED;
-    DLOG(ALERT) << std::fixed <<  __start << " consume pushed to async, key = " << key;
+    DLOG(ALERT) << std::fixed <<  __start << " consume pushed to event, key = " << key;
   }*/
-  // XXX non-async forward for same loop
-  if (/*async_.async_.loop() == Loop::getCurrentLoop() */ false ) {
+  // XXX non-event forward for same loop
+  if (/*event_.event_.loop() == Loop::getCurrentLoop() */ false ) {
     cons_.repl().incrementAsyncForwarded();
     cons_.writeData(cons_.stream(), data, false);
   } else {
-    async_.pushData(/*key,*/ std::string((char*)data.buf, data.size));
+    event_.pushData(/*key,*/ std::string((char*)data.buf, data.size));
   }
 #ifdef REPL_PROFILE
   if (cons_.repl().forwarded() == 3027431) {
@@ -214,13 +214,21 @@ void GrpcRestrStreamCons::ConsumerWrapper::consume(const std::string &key, const
 #endif
 }
 
-void GrpcRestrStreamCons::AsyncConsumer::onError(Async *async, Error error, int code)
+void GrpcRestrStreamCons::EventConsumer::onError(Event *event, Error error, int code)
 {
   assert(false);
 }
 
-void GrpcRestrStreamCons::AsyncConsumer::onAsync(Async *async)
+void GrpcRestrStreamCons::EventConsumer::onEvent(Event *event)
 {
+  auto& lock = cons_.stream()->conn().conn()->wrapper()->getLock();
+  if (lock.test_and_set(std::memory_order_relaxed)) {
+    // Wait for next async invocation
+    return;
+  }
+  AtomicUnlock unlock(lock);
+  // connection is locked
+  event->stopEvent();
 #ifdef USE_CONCURRENT_QUEUE
   std::string tmp;
   while (cq_.try_dequeue(tmp)) {
@@ -242,7 +250,7 @@ void GrpcRestrStreamCons::AsyncConsumer::onAsync(Async *async)
         tmp.append(p, 6);
       }
       INIT_ELAPSED;
-      DLOG(ALERT) << std::fixed << __start << " on async, key = " << tmp;
+      DLOG(ALERT) << std::fixed << __start << " on event, key = " << tmp;
     }*/
     cons_.repl().incrementAsyncForwarded();
     Chain::Buffer outbuf;
@@ -254,9 +262,9 @@ void GrpcRestrStreamCons::AsyncConsumer::onAsync(Async *async)
 }
 
 
-void GrpcRestrStreamCons::AsyncConsumer::pushData(std::string &&data)
+void GrpcRestrStreamCons::EventConsumer::pushData(std::string &&data)
 {
-  if (async_.disabled())
+  if (event_.disabled())
     return;
 #ifdef USE_CONCURRENT_QUEUE
   cq_.enqueue(std::move(data));
@@ -266,6 +274,6 @@ void GrpcRestrStreamCons::AsyncConsumer::pushData(std::string &&data)
     queue_.emplace_back(std::move(data));
   }
 #endif
-  async_.setAsync();
+  event_.setEvent();
 }
 
